@@ -1,0 +1,20 @@
+# Azure
+azure-ai-formrecognizer
+openai>=1.0.0
+azure-identity
+
+# Backend (Part 2)
+fastapi
+uvicorn[standard]
+httpx
+
+# Frontend
+streamlit
+
+# Data / ML
+numpy
+beautifulsoup4
+pydantic
+
+# Utilities
+python-dotenv

@@ -1,0 +1,41 @@
+# ---- Secrets / config (NEVER commit) ----
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# ---- Logs ----
+logs/
+*.log
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Claude Code ----
+.claude/
+
+# ---- Design docs (local only) ----
+docs/
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
