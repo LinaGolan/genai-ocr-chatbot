@@ -13,7 +13,6 @@ streamlit
 
 # Data / ML
 numpy
-beautifulsoup4
 pydantic
 
 # Utilities

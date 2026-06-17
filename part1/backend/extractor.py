@@ -24,12 +24,64 @@ from shared.logger import get_logger
 from part1.backend.prompts import (
     EXTRACTION_SYSTEM_PROMPT,
     EXTRACTION_USER_PROMPT_TEMPLATE,
+    FEW_SHOT_HEBREW,
+    FEW_SHOT_ENGLISH,
 )
 from part1.backend.schema import FormExtraction
 
 logger = get_logger(__name__)
 
 _TOKEN_WARN_CHARS = 80_000  # ~20k tokens — warn but continue
+
+
+# ---------------------------------------------------------------------------
+# Language detection
+# ---------------------------------------------------------------------------
+
+def detect_language(ocr_text: str) -> str:
+    """
+    Classify the fill language of a BL283 form as 'english' or 'hebrew'.
+
+    The form template is always in Hebrew, so the OCR always contains Hebrew
+    chars. English-filled forms additionally have Latin alphabetic chars in the
+    value fields. A Latin ratio above 12% of all alphabetic chars reliably
+    separates the two cases.
+    """
+    latin = sum(1 for c in ocr_text if "A" <= c <= "Z" or "a" <= c <= "z")
+    hebrew = sum(1 for c in ocr_text if "א" <= c <= "ת")
+    total = latin + hebrew
+    if total == 0:
+        return "hebrew"
+    return "english" if latin / total > 0.12 else "hebrew"
+
+
+# ---------------------------------------------------------------------------
+# Message assembly
+# ---------------------------------------------------------------------------
+
+def _build_extraction_messages(ocr_text: str, language: str) -> list[dict]:
+    """
+    Build the full messages list for the extraction call:
+      [system, few-shot user/assistant pairs..., real user request]
+
+    Language-matched few-shot pairs are injected as real chat turns so the
+    model sees concrete input→output examples before the actual form.
+    """
+    snippets = FEW_SHOT_ENGLISH if language == "english" else FEW_SHOT_HEBREW
+
+    messages: list[dict] = [{"role": "system", "content": EXTRACTION_SYSTEM_PROMPT}]
+    for ocr_snippet, expected_json in snippets:
+        messages.append({
+            "role": "user",
+            "content": EXTRACTION_USER_PROMPT_TEMPLATE.format(ocr_text=ocr_snippet),
+        })
+        messages.append({"role": "assistant", "content": expected_json})
+
+    messages.append({
+        "role": "user",
+        "content": EXTRACTION_USER_PROMPT_TEMPLATE.format(ocr_text=ocr_text),
+    })
+    return messages
 
 
 # ---------------------------------------------------------------------------
@@ -50,13 +102,9 @@ def extract_fields(ocr_markdown: str) -> dict[str, Any]:
             extra={"chars": len(ocr_markdown)},
         )
 
-    messages = [
-        {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": EXTRACTION_USER_PROMPT_TEMPLATE.format(ocr_text=ocr_markdown),
-        },
-    ]
+    language = detect_language(ocr_markdown)
+    logger.info("Form language detected", extra={"language": language})
+    messages = _build_extraction_messages(ocr_markdown, language)
 
     t0 = time.perf_counter()
     raw = _try_structured_outputs(messages) or _call_json_object(messages)
@@ -65,6 +113,8 @@ def extract_fields(ocr_markdown: str) -> dict[str, Any]:
     # Merge with defaults so all keys are present, then validate shape
     complete = _merge_with_empty(raw)
     _pad_id_number(complete)
+    _fix_mobile_phone(complete)
+    _fix_landline_phone(complete)
     _fix_date_fields(complete)
     parsed = FormExtraction.model_validate(complete)
     result = parsed.model_dump()
@@ -73,6 +123,7 @@ def extract_fields(ocr_markdown: str) -> dict[str, Any]:
     logger.info(
         "Extraction complete",
         extra={
+            "language": language,
             "empty_fields": empty_count,
             "latency_s": round(elapsed, 2),
             "mode": "structured_outputs" if raw is not _SENTINEL else "json_object",
@@ -223,6 +274,46 @@ def _pad_id_number(data: dict) -> None:
     if len(digits) == 10:
         digits = digits[:9]  # drop trailing ס״ב branch code digit
     data["idNumber"] = digits.zfill(9)
+
+
+def _fix_landline_phone(data: dict) -> None:
+    """Ensure landlinePhone starts with '0[1-9]' (e.g. 02, 03, 04, 08, 09).
+
+    OCR can misread the leading zero or introduce extra zeros. Strip all
+    leading zeros then prepend exactly one '0', guaranteeing the result is
+    never '00...' and always '0' followed by the first non-zero digit.
+    """
+    raw = str(data.get("landlinePhone") or "")
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return
+    if re.match(r"^0[1-9]", digits):
+        return  # already correct
+    stripped = digits.lstrip("0")
+    if stripped:
+        data["landlinePhone"] = "0" + stripped
+
+
+def _fix_mobile_phone(data: dict) -> None:
+    """Ensure mobilePhone digits start with '05', correcting OCR misreads.
+
+    Israeli mobile numbers are always 05X-XXXXXXX (10 digits starting with 05).
+    If OCR produced a leading digit other than '05' (e.g. '06', '03', or a bare
+    '5' with the leading zero dropped), patch the prefix to '05'.
+    """
+    raw = str(data.get("mobilePhone") or "")
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return
+    if digits.startswith("05"):
+        return
+    if digits.startswith("5"):
+        # leading zero dropped by OCR
+        digits = "0" + digits
+    else:
+        # wrong prefix — replace first two digits with "05"
+        digits = "05" + digits[2:]
+    data["mobilePhone"] = digits
 
 
 _EMPTY_EXTRACTION: dict = {

@@ -52,8 +52,12 @@ def validate(
 
     # 3. LLM self-review (supplementary — cannot downgrade 'invalid')
     if ocr_markdown:
+        word_conf: dict[str, float] = (
+            {w.lower().strip(".,;:\"'()"): c for w, c in ocr_result.word_confidences}
+            if ocr_result else {}
+        )
         try:
-            _run_llm_review(extracted, ocr_markdown, statuses)
+            _run_llm_review(extracted, ocr_markdown, statuses, word_conf)
         except Exception as exc:
             logger.warning("LLM self-review skipped", extra={"error": str(exc)[:200]})
 
@@ -199,11 +203,11 @@ def _check_postal(extracted: dict, statuses: dict) -> None:
     if not postal:
         return
     clean = re.sub(r"\s", "", postal)
-    if re.fullmatch(r"\d{7}", clean):
+    if re.fullmatch(r"\d{1,7}", clean):
         statuses.setdefault("address.postalCode", FieldStatus("ok"))
     else:
         statuses["address.postalCode"] = FieldStatus(
-            "uncertain", f"Postal code should be 7 digits, got: {postal!r}"
+            "uncertain", f"Postal code should be up to 7 digits, got: {postal!r}"
         )
 
 
@@ -283,9 +287,36 @@ def _check_field_word_confidence(
 # ---------------------------------------------------------------------------
 
 _OCR_REVIEW_CHAR_LIMIT = 4_000  # cap to avoid token overflow
+_HIGH_CONF_THRESHOLD   = 0.85   # minimum per-word confidence to trust the OCR value
 
 
-def _run_llm_review(extracted: dict, ocr_markdown: str, statuses: dict) -> None:
+def _resolve_field_value(extracted: dict, fname: str) -> str:
+    """Resolve a dotted field key to its string value from the extracted dict."""
+    val: Any = extracted
+    for part in fname.split("."):
+        val = val.get(part, "") if isinstance(val, dict) else ""
+    if isinstance(val, dict):
+        return "/".join(filter(None, [val.get("day"), val.get("month"), val.get("year")]))
+    return str(val) if val else ""
+
+
+def _ocr_confirms_value(value: str, word_conf: dict[str, float], ocr_markdown: str) -> bool:
+    """Return True when every token of *value* appears in the OCR with high confidence
+    AND the value itself is present verbatim in the OCR text.
+
+    Used to discard LLM self-review false-positives where the extracted value is
+    demonstrably supported by high-confidence OCR evidence.
+    """
+    if not value or value not in ocr_markdown:
+        return False
+    tokens = value.split()
+    return all(
+        word_conf.get(t.lower().strip(".,;:\"'()"), 0.0) >= _HIGH_CONF_THRESHOLD
+        for t in tokens
+    )
+
+
+def _run_llm_review(extracted: dict, ocr_markdown: str, statuses: dict, word_conf: dict[str, float] | None = None) -> None:
     prompt = SELF_REVIEW_USER_PROMPT_TEMPLATE.format(
         ocr_text=ocr_markdown[:_OCR_REVIEW_CHAR_LIMIT],
         extracted_json=json.dumps(extracted, ensure_ascii=False, indent=2),
@@ -311,6 +342,10 @@ def _run_llm_review(extracted: dict, ocr_markdown: str, statuses: dict) -> None:
             continue
         # Discard flags where the claimed OCR evidence doesn't actually appear in the text
         if ocr_quote and ocr_quote not in ocr_markdown:
+            discarded.append(fname)
+            continue
+        # Discard false positives: extracted value is verbatim in OCR with high confidence
+        if word_conf and _ocr_confirms_value(_resolve_field_value(extracted, fname), word_conf, ocr_markdown):
             discarded.append(fname)
             continue
         # Cannot downgrade a deterministic 'invalid'

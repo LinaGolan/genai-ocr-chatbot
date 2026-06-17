@@ -1,0 +1,49 @@
+{
+  "lastName": "Cohen",
+  "firstName": "David",
+  "idNumber": "555444330",
+  "gender": "Male",
+  "dateOfBirth": {
+    "day": "07",
+    "month": "12",
+    "year": "1978"
+  },
+  "address": {
+    "street": "8 Herzl Boulevard",
+    "houseNumber": "8",
+    "entrance": "",
+    "apartment": "12",
+    "city": "Jerusalem",
+    "postalCode": "9100001",
+    "poBox": ""
+  },
+  "landlinePhone": "025678901",
+  "mobilePhone": "0523456789",
+  "jobType": "Electrician",
+  "dateOfInjury": {
+    "day": "25",
+    "month": "08",
+    "year": "2024"
+  },
+  "timeOfInjury": "11:00",
+  "accidentLocation": "At workplace",
+  "accidentAddress": "City Hall, 1 Safra Square, Jerusalem",
+  "accidentDescription": "Electric shock while repairing panel in basement",
+  "injuredBodyPart": "Right hand and forearm",
+  "signature": "David Cohen",
+  "formFillingDate": {
+    "day": "25",
+    "month": "08",
+    "year": "2024"
+  },
+  "formReceiptDateAtClinic": {
+    "day": "26",
+    "month": "08",
+    "year": "2024"
+  },
+  "medicalInstitutionFields": {
+    "healthFundMember": "Meuhedet",
+    "natureOfAccident": "Workplace electrical accident",
+    "medicalDiagnoses": "Electrical burns right hand, superficial"
+  }
+}

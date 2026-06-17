@@ -40,6 +40,14 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
+def _log_file(name: str) -> Path:
+    if name.startswith("part1"):
+        return _LOGS_DIR / "part1.log"
+    if name.startswith("part2"):
+        return _LOGS_DIR / "part2.log"
+    return _LOGS_DIR / "app.log"
+
+
 def get_logger(name: str) -> logging.Logger:
     """Return a configured logger for *name*. Safe to call multiple times."""
     logger = logging.getLogger(name)
@@ -49,7 +57,7 @@ def get_logger(name: str) -> logging.Logger:
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
-    fh = logging.FileHandler(_LOGS_DIR / "app.log", encoding="utf-8")
+    fh = logging.FileHandler(_log_file(name), encoding="utf-8")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(_JsonFormatter())
     logger.addHandler(fh)

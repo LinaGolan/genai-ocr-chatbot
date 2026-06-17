@@ -72,41 +72,61 @@ python -m part1.evaluation.evaluate
 
 ## Part 2 — HMO Medical-Services Chatbot
 
-The chatbot is a **stateless** microservice: the frontend holds all session state
-and sends the full conversation history (and confirmed user info) with every
-request. Run the backend and frontend in **two terminals**.
+A **stateless** FastAPI microservice with a Streamlit frontend. The frontend holds
+all session state and sends the full conversation history (and confirmed user info)
+with every request, so the backend keeps no per-user state and scales horizontally.
+
+**Flow:** the bot first collects 8 fields through natural, LLM-driven conversation
+(first/last name, ID, gender, age, HMO, card number, tier) with inline validation,
+shows a confirmation card, then answers questions for the user's HMO **and tier** —
+strictly from the knowledge base. If something isn't covered, it says so.
+
+### Knowledge base & retrieval
+
+The `phase2_data/*.html` pages are pre-rendered **offline** into one focused Markdown
+file per (HMO, tier, topic) — `phase2_data/processed/<hmo>/<tier>/<topic>.md`, 54
+files — by `build_knowledge_base.py` (GPT-4o, `temperature=0`, faithful copy of every
+number/contact). Each file already holds only that HMO+tier's content, so retrieval
+is cheap:
+
+1. The user's HMO + tier select the **folder** — no search needed.
+2. **ADA-002** picks the most relevant **topic** for the question.
+3. **GPT-4o Mini** answers from that single file; if the answer isn't there it emits a
+   sentinel and the backend **escalates** to **GPT-4o** over all topics in the folder.
+
+The common case stays cheap (one small file + the mini model), while a wrong topic
+guess or a cross-topic question still gets answered from the full HMO/tier context.
+
+### Run
 
 ```powershell
-# Terminal 1 — backend (builds the knowledge-base index at startup)
+# 0. one-time: build the Markdown knowledge base (rerun if the source HTML changes)
+python -m part2.backend.build_knowledge_base
+
+# Terminal 1 — backend (embeds the 6 topics at startup)
 uvicorn part2.backend.main:app --reload --port 8000
 
 # Terminal 2 — frontend
 streamlit run part2/frontend/app.py
 ```
 
-If the backend runs somewhere other than `http://localhost:8000`, point the
-frontend at it via the `CHATBOT_BACKEND_URL` environment variable.
-
-**Flow:** the bot first collects 8 fields through natural, LLM-driven conversation
-(name, ID, gender, age, HMO, card number, tier) with inline validation, shows a
-confirmation card, then answers questions strictly from the HTML knowledge base,
-filtered to the user's HMO and tier. Answers come only from the knowledge base —
-if something isn't covered, the bot says so.
+If the backend runs somewhere other than `http://localhost:8000`, point the frontend
+at it via the `CHATBOT_BACKEND_URL` environment variable.
 
 API (also documented at `http://localhost:8000/docs`):
 
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/chat/collect` | Advance info collection; returns `user_info` once complete |
-| `POST` | `/api/chat/qa` | Answer a question from the user's HMO knowledge |
-| `GET`  | `/health` | Liveness + knowledge-index status |
+| `POST` | `/api/chat/qa` | Answer a question from the user's HMO/tier knowledge |
+| `GET`  | `/health` | Liveness + topic-index status |
 
 ---
 
 ## Logging
 
-All activity is logged as JSON lines to `logs/app.log` via the shared
-`get_logger` factory: requests, latency, token usage, retrieval matches and
-scores, and errors. ID numbers are SHA-256 hashed before logging — **no raw PII
-is ever written**.
+All activity is logged as JSON lines via the shared `get_logger` factory
+(`logs/part1.log`, `logs/part2.log`): requests, latency, the selected topic and
+whether the answer escalated, and errors. ID numbers are SHA-256 hashed before
+logging — **no raw PII is ever written**.
 ```
