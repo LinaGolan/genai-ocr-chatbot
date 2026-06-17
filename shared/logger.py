@@ -15,6 +15,13 @@ _LOGS_DIR = Path(__file__).parent.parent / "logs"
 _LOGS_DIR.mkdir(exist_ok=True)
 
 
+# Attributes always present on a LogRecord — anything else was injected via the
+# `extra={...}` argument and should be surfaced in the JSON payload.
+_STD_LOGRECORD_ATTRS = frozenset(vars(logging.makeLogRecord({})).keys()) | {
+    "message", "asctime", "taskName",
+}
+
+
 class _JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: dict = {
@@ -25,9 +32,12 @@ class _JsonFormatter(logging.Formatter):
         }
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
-        if hasattr(record, "extra"):
-            payload.update(record.extra)
-        return json.dumps(payload, ensure_ascii=False)
+        # Merge any caller-supplied `extra={...}` fields (logging stores them as
+        # top-level record attributes, not under record.extra).
+        for key, value in record.__dict__.items():
+            if key not in _STD_LOGRECORD_ATTRS and not key.startswith("_"):
+                payload[key] = value
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def get_logger(name: str) -> logging.Logger:

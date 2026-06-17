@@ -1,0 +1,49 @@
+{
+  "lastName": "",
+  "firstName": "",
+  "idNumber": "",
+  "gender": "",
+  "dateOfBirth": {
+    "day": "",
+    "month": "",
+    "year": ""
+  },
+  "address": {
+    "street": "",
+    "houseNumber": "",
+    "entrance": "",
+    "apartment": "",
+    "city": "",
+    "postalCode": "",
+    "poBox": ""
+  },
+  "landlinePhone": "",
+  "mobilePhone": "",
+  "jobType": "",
+  "dateOfInjury": {
+    "day": "",
+    "month": "",
+    "year": ""
+  },
+  "timeOfInjury": "",
+  "accidentLocation": "",
+  "accidentAddress": "",
+  "accidentDescription": "",
+  "injuredBodyPart": "",
+  "signature": "",
+  "formFillingDate": {
+    "day": "",
+    "month": "",
+    "year": ""
+  },
+  "formReceiptDateAtClinic": {
+    "day": "",
+    "month": "",
+    "year": ""
+  },
+  "medicalInstitutionFields": {
+    "healthFundMember": "",
+    "natureOfAccident": "",
+    "medicalDiagnoses": ""
+  }
+}

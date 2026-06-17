@@ -34,6 +34,9 @@ ENV/
 # ---- Design docs (local only) ----
 docs/
 
+# ---- Examples / scratch ----
+examples/
+
 # ---- IDE / OS ----
 .idea/
 .vscode/
