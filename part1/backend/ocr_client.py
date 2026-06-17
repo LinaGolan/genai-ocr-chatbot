@@ -117,14 +117,13 @@ def analyze_document(file_bytes: bytes, filename: str) -> OCRResult:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _call_layout_api(file_bytes: bytes, content_type: str):  # noqa: ARG001
+def _call_layout_api(file_bytes: bytes, content_type: str):
     """Single attempt at the Document Intelligence Layout API call."""
-    # content_type is validated by the caller; the SDK infers the MIME type
-    # itself (it internally sends application/octet-stream — passing it again
-    # raises 'got multiple values for keyword argument content_type').
     poller = document_intelligence_client.begin_analyze_document(
         "prebuilt-layout",
         io.BytesIO(file_bytes),
+        content_type=content_type,
+        output_content_format="markdown",
         pages="1",
     )
     return poller.result()

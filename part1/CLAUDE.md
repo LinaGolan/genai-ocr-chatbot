@@ -3,6 +3,7 @@
 Extract the assignment's target JSON from an uploaded PDF/JPG of the BL283 form. Full design: @docs/part1-extraction.md
 
 # Structure
+- `backend/schema.py` — all part1 data models: the Pydantic output schema (`FormExtraction` + nested), the single source of truth for the JSON shape shared by extractor and validator; plus the validation result types (`FieldStatus`, `ValidationResult`)
 - `backend/ocr_client.py` — Document Intelligence **Layout API** wrapper (not Read/General — the form has tables and checkboxes); returns markdown + confidence scores
 - `backend/extractor.py` — GPT-4o extraction, OCR markdown → JSON
 - `backend/validator.py` — three-signal validation: deterministic checks + OCR confidence + GPT-4o Mini self-review
@@ -14,7 +15,7 @@ Extract the assignment's target JSON from an uploaded PDF/JPG of the BL283 form.
 - Forms come in **Hebrew or English** — extract regardless of language.
 - For any field not present or not legible, output an **empty string** (never null, never omitted). Never guess/invent values.
 - Extraction runs at **`temperature=0`**. Prefer Structured Outputs (`response_format` `json_schema`, `strict`); fall back to `{"type":"json_object"}` only on older API versions.
-- The output JSON shape is fixed by the assignment — match it exactly (see `validator.py` Pydantic schema, the single source of truth).
+- The output JSON shape is fixed by the assignment — match it exactly (see `schema.py` Pydantic models, the single source of truth).
 - **Validation is deterministic-first.** The Israeli `idNumber` MUST be checked with its check-digit (checksum) algorithm; dates/phones/postal validated by format. The LLM self-review is supplementary and must NOT override a deterministic `invalid`.
 - Accuracy is **measured offline** via `evaluation/` against labeled samples — not asserted by the model at runtime.
 - Validate uploads (type/size/pages) and retry transient Azure errors with backoff. Never log raw extracted PII values.

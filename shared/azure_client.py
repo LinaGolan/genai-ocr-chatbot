@@ -2,7 +2,7 @@
 Single source of truth for all Azure SDK client singletons.
 
 All other modules import clients from here — never instantiate AzureOpenAI,
-AsyncAzureOpenAI, or DocumentAnalysisClient elsewhere.
+AsyncAzureOpenAI, or DocumentIntelligenceClient elsewhere.
 
 Raises ValueError at import time if any required environment variable is missing,
 so misconfiguration fails fast on startup rather than mid-request.
@@ -10,7 +10,7 @@ so misconfiguration fails fast on startup rather than mid-request.
 
 import os
 
-from azure.ai.formrecognizer import DocumentAnalysisClient
+from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.core.credentials import AzureKeyCredential
 from dotenv import load_dotenv
 from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -60,7 +60,7 @@ async_openai_client: AsyncAzureOpenAI = AsyncAzureOpenAI(
 )
 
 # Document Intelligence — used by Part 1 for OCR (Layout API)
-document_intelligence_client: DocumentAnalysisClient = DocumentAnalysisClient(
+document_intelligence_client: DocumentIntelligenceClient = DocumentIntelligenceClient(
     endpoint=_DOC_INTEL_ENDPOINT,
     credential=AzureKeyCredential(_DOC_INTEL_KEY),
 )

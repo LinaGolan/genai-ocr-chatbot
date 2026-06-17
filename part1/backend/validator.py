@@ -8,96 +8,19 @@ Priority order (a higher-priority 'invalid' cannot be downgraded):
   2. OCR confidence        — per-word confidence from Document Intelligence
   3. LLM self-review       — GPT-4o semantic plausibility (supplementary only)
 
-The Pydantic models here are the single source of truth for the output schema.
-extractor.py imports FormExtraction from this module.
+All data models live in schema.py; this module is validation logic only.
 """
 
 import json
 import re
-from dataclasses import dataclass, field
 from typing import Any, Literal
-
-from pydantic import BaseModel
 
 from shared.azure_client import openai_client, GPT4O_DEPLOYMENT
 from shared.logger import get_logger, hash_id
 from part1.backend.prompts import SELF_REVIEW_SYSTEM_PROMPT, SELF_REVIEW_USER_PROMPT_TEMPLATE
+from part1.backend.schema import FieldStatus, ValidationResult
 
 logger = get_logger(__name__)
-
-Status = Literal["ok", "uncertain", "invalid"]
-
-
-# ---------------------------------------------------------------------------
-# Pydantic schema — single source of truth for the output JSON shape
-# ---------------------------------------------------------------------------
-
-class DateField(BaseModel):
-    day: str = ""
-    month: str = ""
-    year: str = ""
-
-
-class AddressField(BaseModel):
-    street: str = ""
-    houseNumber: str = ""
-    entrance: str = ""
-    apartment: str = ""
-    city: str = ""
-    postalCode: str = ""
-    poBox: str = ""
-
-
-class MedicalInstitutionFields(BaseModel):
-    healthFundMember: str = ""
-    natureOfAccident: str = ""
-    medicalDiagnoses: str = ""
-
-
-class FormExtraction(BaseModel):
-    lastName: str = ""
-    firstName: str = ""
-    idNumber: str = ""
-    gender: str = ""
-    dateOfBirth: DateField = DateField()
-    address: AddressField = AddressField()
-    landlinePhone: str = ""
-    mobilePhone: str = ""
-    jobType: str = ""
-    dateOfInjury: DateField = DateField()
-    timeOfInjury: str = ""
-    accidentLocation: str = ""
-    accidentAddress: str = ""
-    accidentDescription: str = ""
-    injuredBodyPart: str = ""
-    signature: str = ""
-    formFillingDate: DateField = DateField()
-    formReceiptDateAtClinic: DateField = DateField()
-    medicalInstitutionFields: MedicalInstitutionFields = MedicalInstitutionFields()
-
-
-# ---------------------------------------------------------------------------
-# Result types
-# ---------------------------------------------------------------------------
-
-@dataclass
-class FieldStatus:
-    status: Status = "ok"
-    reason: str = ""
-
-
-@dataclass
-class ValidationResult:
-    fields: dict[str, FieldStatus]
-    completeness: float
-    accuracy_estimate: Literal["high", "medium", "low"]
-
-    def to_dict(self) -> dict:
-        return {
-            "fields": {k: {"status": v.status, "reason": v.reason} for k, v in self.fields.items()},
-            "completeness": self.completeness,
-            "accuracy_estimate": self.accuracy_estimate,
-        }
 
 
 # ---------------------------------------------------------------------------

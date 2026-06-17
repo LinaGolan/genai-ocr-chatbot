@@ -3,6 +3,10 @@ from __future__ import annotations
 # Part 1 — Streamlit UI for BL283 form field extraction.
 # Layout: left panel = raw OCR markdown, right panel = colour-coded JSON + badges.
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import json
 from typing import Any
 
@@ -10,7 +14,8 @@ import streamlit as st
 
 from part1.backend.ocr_client import analyze_document, OCRResult
 from part1.backend.extractor import extract_fields
-from part1.backend.validator import validate, ValidationResult, FieldStatus
+from part1.backend.validator import validate
+from part1.backend.schema import ValidationResult, FieldStatus
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -200,7 +205,6 @@ def main() -> None:
         return
 
     # Reconstruct ValidationResult for rendering
-    from part1.backend.validator import ValidationResult, FieldStatus  # local to avoid top-level cost
     val_result = ValidationResult(
         fields={
             k: FieldStatus(v["status"], v.get("reason", ""))

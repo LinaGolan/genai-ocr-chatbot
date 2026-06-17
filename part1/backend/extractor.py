@@ -8,7 +8,7 @@ Strategy:
      guaranteed schema conformance (requires API version 2024-08-01-preview+).
   2. Fall back to response_format={"type":"json_object"} on older API versions.
 
-The Pydantic FormExtraction model in validator.py is the single schema source
+The Pydantic FormExtraction model in schema.py is the single schema source
 of truth — the JSON schema submitted to the API is derived from it at runtime.
 """
 
@@ -25,7 +25,7 @@ from part1.backend.prompts import (
     EXTRACTION_SYSTEM_PROMPT,
     EXTRACTION_USER_PROMPT_TEMPLATE,
 )
-from part1.backend.validator import FormExtraction
+from part1.backend.schema import FormExtraction
 
 logger = get_logger(__name__)
 
@@ -151,24 +151,30 @@ def _call_json_object(messages: list[dict]) -> dict:
 
 def _build_strict_schema() -> dict:
     """
-    Derive a JSON Schema from the Pydantic model and patch it for strict mode:
-    every object gets additionalProperties: false.
+    Derive a JSON Schema from the Pydantic model and patch it for strict mode.
     """
     schema = FormExtraction.model_json_schema()
-    _add_additional_properties_false(schema)
+    _patch_for_strict_mode(schema)
     return schema
 
 
-def _add_additional_properties_false(node: dict) -> None:
-    """Recursively ensure every object node has additionalProperties: false."""
+def _patch_for_strict_mode(node: dict) -> None:
+    """Patch a JSON Schema node for Azure Strict Structured Outputs:
+    - Every object: required = all property keys, additionalProperties = false
+    - Strip default values (strict mode rejects them)
+    All three are required; missing any one causes a BadRequestError.
+    """
+    node.pop("default", None)
     if node.get("type") == "object":
-        node.setdefault("additionalProperties", False)
-        for prop_schema in node.get("properties", {}).values():
-            _add_additional_properties_false(prop_schema)
+        props = node.get("properties", {})
+        node["required"] = list(props.keys())
+        node["additionalProperties"] = False
+        for prop_schema in props.values():
+            _patch_for_strict_mode(prop_schema)
     for sub in node.get("$defs", {}).values():
-        _add_additional_properties_false(sub)
+        _patch_for_strict_mode(sub)
     for item in node.get("allOf", []):
-        _add_additional_properties_false(item)
+        _patch_for_strict_mode(item)
 
 
 _DATE_KEYS = ("dateOfBirth", "dateOfInjury", "formFillingDate", "formReceiptDateAtClinic")
