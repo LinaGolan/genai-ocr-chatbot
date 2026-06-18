@@ -35,20 +35,23 @@ matches the schema below exactly.
       or each on its own line. Zero-pad as needed.
 5. Gender: map זכר / male / ז / M to "זכר"; נקבה / female / נ / F to "נקבה"; otherwise "".
    Checkboxes appear as ☒ (checked) or ☐ (unchecked). Find the ☒ symbol and read the adjacent
-   option label to determine the selected value. Apply this same logic to accidentLocation and healthFundMember.
+   option label to determine the selected value. Apply this same logic to accidentLocation (healthFundMember has its own rule 11 below).
    jobType: extract the free-text the person wrote after the label "כאשר עבדתי ב" (or "סוג העבודה") — it is their occupation or role (e.g. "מלצרות", "ירקנייה"). This is always a handwritten line; ignore the nearby employment-status checkboxes (שכיר / עצמאי / אחר), which are a separate field.
 6. Phone numbers: digits only — strip all dashes, spaces, and parentheses.
    - Hebrew label "טלפון נייד" / "נייד" → mobilePhone
    - Hebrew label "טלפון בית" / "טל' קווי" / "קווי" / "טלפון קווי" → landlinePhone
    - A lone letter or symbol (e.g. "C") near a phone label is a form artefact — ignore it.
-7. Signature: if a signature mark near the word "חתימה" with a visible mark is present,
-   output "קיימת"; if the signature area is blank, output "".
+7. Signature: output "קיימת" ONLY when there is a clear handwritten signature or name
+   written in the חתימה area. If that area is blank, shows only the printed "חתימה" label,
+   or has just a stray mark / form line, output "". When unsure, output "" — do NOT assume
+   a signature exists.
 8. Output ONLY the JSON object. No explanation, no markdown fences, no extra text.
 9. ID number (מספר זהות): preserve the exact digit string from the OCR, including any
    leading zeros. Israeli ID numbers are always 9 digits — if OCR shows 8 digits, pad
-   with one leading zero (e.g. "22456120" → "022456120"). The ת.ז. and ס"ב fields share
-   a row on the form; if the merged OCR string yields 10 digits (e.g. "0|3|3|4|5|2|1|5|6|7"),
-   take the first 9 digits as the ID and discard the trailing digit (ס"ב branch code).
+   with one leading zero (e.g. "22456120" → "022456120"). If the OCR string has 10 or
+   more digits, output ALL of them exactly as extracted — do not truncate. The validator
+   will flag the wrong length. (The ת.ז. and ס"ב fields share a row; when OCR merges
+   them into a 10-digit string, output all 10 — vision correction will separate them later.)
 10. Address sub-fields — use the exact Hebrew label on the form:
     - רחוב → street
     - מספר בית → houseNumber
@@ -57,6 +60,15 @@ matches the schema below exactly.
     - עיר / יישוב → city
     - מיקוד → postalCode
     - ת.ד. / ת"ד → poBox
+11. healthFundMember (the treating Health Maintenance Organization): MUST be exactly one of the four
+    HMOs — מכבי, מאוחדת, לאומית, כללית — or an empty string "".
+    a) PRIMARY source: the HMO marked ☒ in the "למילוי ע״י המוסד הרפואי" checkbox row at the bottom.
+    b) If NO HMO box is marked (e.g. only "הנפגע חבר בקופת חולים" is ticked), use the HMO named in the
+       top header "אל קופ״ח/ביה״ח ___" — only if it is one of the four HMOs (it may be blank or name a
+       hospital such as "מאיר", which you must ignore).
+    c) Otherwise output "". NEVER guess, and NEVER output a hospital name or any non-HMO value.
+    (OCR often reorders this checkbox row and attaches ☒ to the wrong HMO; give your best read here —
+    this field is re-verified from the form image downstream.)
 
 === TARGET JSON SCHEMA ===
 {
@@ -367,7 +379,7 @@ OCR excerpt (real Layout API output):
   מאוחדת
 
 Key parsing notes:
-- ת.ז. and ס"ב share a row → OCR produces 10-digit string "0334521567"; take first 9 → idNumber="033452156"
+- ת.ז. and ס"ב share a row → OCR produces 10-digit string "0334521567"; output all 10 digits — validator flags the length and vision correction will separate ת.ז. from ס"ב
 - dateOfBirth "03031974" → day="03", month="03", year="1974"
 - formFillingDate "20051999" → day="20", month="05", year="1999"
 - formReceiptDateAtClinic "30061999" → day="30", month="06", year="1999"
@@ -376,7 +388,7 @@ Key parsing notes:
 - accidentLocation: ☒ next to "במפעל" → accidentLocation="במפעל"
 - Signature: "רועי" written under "חתימה", confirmed by "רועי יוחננוף" on שם המבקש → signature="קיימת"
 - healthFundMember: ☒ next to "כללית" → healthFundMember="כללית\"""",
-        '{"lastName":"יוחננוף","firstName":"רועי","idNumber":"033452156","gender":"זכר","dateOfBirth":{"day":"03","month":"03","year":"1974"},"address":{"street":"המאיר","houseNumber":"15","entrance":"1","apartment":"16","city":"אלוני הבשן","postalCode":"445412","poBox":""},"landlinePhone":"0975423541","mobilePhone":"0502451645","jobType":"ירקנייה","dateOfInjury":{"day":"14","month":"04","year":"1999"},"timeOfInjury":"15:30","accidentLocation":"במפעל","accidentAddress":"לוונברג 173 כפר סבא","accidentDescription":"במהלך העבודה הרמתי משקל כבד וכתוצאה מכך הייתי צריך ניתוח קילה","injuredBodyPart":"קילה","signature":"קיימת","formFillingDate":{"day":"20","month":"05","year":"1999"},"formReceiptDateAtClinic":{"day":"30","month":"06","year":"1999"},"medicalInstitutionFields":{"healthFundMember":"כללית","natureOfAccident":"","medicalDiagnoses":""}}',
+        '{"lastName":"יוחננוף","firstName":"רועי","idNumber":"0334521567","gender":"זכר","dateOfBirth":{"day":"03","month":"03","year":"1974"},"address":{"street":"המאיר","houseNumber":"15","entrance":"1","apartment":"16","city":"אלוני הבשן","postalCode":"445412","poBox":""},"landlinePhone":"0975423541","mobilePhone":"0502451645","jobType":"ירקנייה","dateOfInjury":{"day":"14","month":"04","year":"1999"},"timeOfInjury":"15:30","accidentLocation":"במפעל","accidentAddress":"לוונברג 173 כפר סבא","accidentDescription":"במהלך העבודה הרמתי משקל כבד וכתוצאה מכך הייתי צריך ניתוח קילה","injuredBodyPart":"קילה","signature":"קיימת","formFillingDate":{"day":"20","month":"05","year":"1999"},"formReceiptDateAtClinic":{"day":"30","month":"06","year":"1999"},"medicalInstitutionFields":{"healthFundMember":"כללית","natureOfAccident":"","medicalDiagnoses":""}}',
     ),
 ]
 
@@ -569,7 +581,7 @@ Key parsing notes:
 - accidentLocation: ☒ next to "ת. דרכים בדרך לעבודה/מהעבודה" → accidentLocation="ת. דרכים בדרך לעבודה/מהעבודה"
 - jobType: "Software Developer" before "כאשר עבדתי ב" (RTL) → jobType="Software Developer"
 - Signature: "Sarah Johnson" near "חתימה" → signature="קיימת"
-- healthFundMember: ☒ next to "כללית" → healthFundMember="כללית"
+- healthFundMember: OCR shows ☒ next to "כללית" → best OCR read healthFundMember="כללית" (the image re-verification step corrects this — on the real form no HMO box is marked and the header reads מאוחדת)
 - medicalDiagnoses: "Right knee sprain, grade II" → medicalDiagnoses="Right knee sprain, grade II\"""",
         '{"lastName":"Johnson","firstName":"Sarah","idNumber":"987654324","gender":"נקבה","dateOfBirth":{"day":"22","month":"08","year":"1990"},"address":{"street":"15 Pine Avenue","houseNumber":"15","entrance":"B","apartment":"7","city":"Haifa","postalCode":"3200001","poBox":""},"landlinePhone":"048765432","mobilePhone":"0529876543","jobType":"Software Developer","dateOfInjury":{"day":"03","month":"11","year":"2023"},"timeOfInjury":"09:15","accidentLocation":"ת. דרכים בדרך לעבודה/מהעבודה","accidentAddress":"Route 2 near Haifa interchange","accidentDescription":"Slipped on wet entrance floor, injured right knee","injuredBodyPart":"Right knee","signature":"קיימת","formFillingDate":{"day":"03","month":"11","year":"2023"},"formReceiptDateAtClinic":{"day":"04","month":"11","year":"2023"},"medicalInstitutionFields":{"healthFundMember":"כללית","natureOfAccident":"","medicalDiagnoses":"Right knee sprain, grade II"}}',
     ),
@@ -597,14 +609,26 @@ STRICT RULES:
    Do not translate or "tidy up" free-text values. (Structured fields follow rules 4–6 below.)
 3. If a field is blank on the form, or you cannot read it clearly, return an empty string "".
    NEVER guess, infer, or invent a value.
-4. idNumber: return exactly 9 digits, no spaces or separators. If you cannot read all 9 clearly,
-   return "".
+4. idNumber: return every digit shown in the ID number field exactly as written, with no spaces
+   or separators — however many there are. If the ת.ז. and ס"ב boxes run together as a 10-digit
+   string, return all 10; do NOT drop or add digits to force a 9-digit result. If you cannot read
+   the digits clearly, return "".
 5. Date fields (dateOfBirth, dateOfInjury, formFillingDate, formReceiptDateAtClinic): return the
    date as DD/MM/YYYY using digits only. If you cannot read the full date, return "".
 6. Phone fields (mobilePhone, landlinePhone): return digits only, including the leading 0
    (e.g. 0501234567).
 7. The previous guess may be wrong — trust the image, not the guess. If the image clearly shows the
    same value, return that same value.
+8. signature: return "קיימת" ONLY if a clear handwritten signature or name is present in the חתימה
+   area of the image. If that area is blank, shows only the printed label, or has just a stray mark,
+   return "". An empty string here is a real answer (no signature) — not "could not read".
+9. medicalInstitutionFields.healthFundMember: read the "למילוי ע״י המוסד הרפואי" checkbox row in the
+   image. Return the single HMO marked ☒ — one of מכבי, מאוחדת, לאומית, כללית. The row is RIGHT-TO-LEFT
+   with the HMO names close together, so zoom in and match the filled box to its HMO by precise
+   horizontal alignment. Exactly one HMO is marked: name it and verify the other three boxes are empty ☐.
+   If NO HMO box is marked (e.g. only "הנפגע חבר בקופת חולים" is ticked), return the
+   HMO named in the top header "אל קופ״ח/ביה״ח ___" only if it is one of those four. If neither applies
+   (header blank or a hospital such as "מאיר"), return "". NEVER return a hospital name or non-HMO value.
 
 Return ONLY a JSON object whose keys are exactly the requested field names and whose values are
 strings. No commentary."""
@@ -640,4 +664,6 @@ VISION_FIELD_LABELS: dict[str, str] = {
     "injuredBodyPart": "האיבר שנפגע / injured body part",
     "formFillingDate": "תאריך מילוי הטופס / form filling date (DD/MM/YYYY)",
     "formReceiptDateAtClinic": "תאריך קבלת הטופס בקופה / form receipt date (DD/MM/YYYY)",
+    "signature": "חתימה / signature present? — return 'קיימת' if signed, else \"\"",
+    "medicalInstitutionFields.healthFundMember": "חבר בקופת חולים / treating HMO (מכבי/מאוחדת/לאומית/כללית)",
 }

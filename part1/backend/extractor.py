@@ -13,13 +13,21 @@ of truth — the JSON schema submitted to the API is derived from it at runtime.
 """
 
 import json
+import os
 import re
 import time
 from typing import Any
 
 from openai import BadRequestError
 
-from shared.azure_client import openai_client, GPT4O_DEPLOYMENT
+from shared.azure_client import openai_client, GPT4O_DEPLOYMENT, GPT4O_MINI_DEPLOYMENT
+
+# Extraction model is overridable for cost/accuracy A/B testing via the harness.
+# EXTRACTION_MODEL=mini selects the cheaper deployment; anything else keeps 4o.
+_EXTRACTION_DEPLOYMENT = (
+    GPT4O_MINI_DEPLOYMENT if os.getenv("EXTRACTION_MODEL", "").lower() == "mini"
+    else GPT4O_DEPLOYMENT
+)
 from shared.logger import get_logger
 from part1.backend.prompts import (
     EXTRACTION_SYSTEM_PROMPT,
@@ -115,7 +123,6 @@ def extract_fields(ocr_markdown: str) -> dict[str, Any]:
     _pad_id_number(complete)
     _fix_mobile_phone(complete)
     _fix_landline_phone(complete)
-    _fix_date_fields(complete)
     parsed = FormExtraction.model_validate(complete)
     result = parsed.model_dump()
 
@@ -148,7 +155,7 @@ def _try_structured_outputs(messages: list[dict]) -> dict | None:
     try:
         schema = _build_strict_schema()
         response = openai_client.chat.completions.create(
-            model=GPT4O_DEPLOYMENT,
+            model=_EXTRACTION_DEPLOYMENT,
             messages=messages,
             temperature=0,
             seed=42,
@@ -267,53 +274,28 @@ def _normalize_date(d: dict) -> None:
 
 
 def _pad_id_number(data: dict) -> None:
-    """Strip non-digits, trim 10→9 (ס״ב branch code), left-pad to 9 digits."""
+    """Strip non-digits; left-pad to 9 if fewer than 9 digits (OCR may drop leading zero).
+    10+ digit strings are preserved as-is so the validator can flag the length error."""
     digits = re.sub(r"\D", "", str(data.get("idNumber") or ""))
     if not digits:
         return
-    if len(digits) == 10:
-        digits = digits[:9]  # drop trailing ס״ב branch code digit
-    data["idNumber"] = digits.zfill(9)
+    data["idNumber"] = digits if len(digits) >= 9 else digits.zfill(9)
 
 
 def _fix_landline_phone(data: dict) -> None:
-    """Ensure landlinePhone starts with '0[1-9]' (e.g. 02, 03, 04, 08, 09).
-
-    OCR can misread the leading zero or introduce extra zeros. Strip all
-    leading zeros then prepend exactly one '0', guaranteeing the result is
-    never '00...' and always '0' followed by the first non-zero digit.
-    """
+    """Strip non-digit characters from landlinePhone; preserve digit content for validation."""
     raw = str(data.get("landlinePhone") or "")
     digits = re.sub(r"\D", "", raw)
-    if not digits:
-        return
-    if re.match(r"^0[1-9]", digits):
-        return  # already correct
-    stripped = digits.lstrip("0")
-    if stripped:
-        data["landlinePhone"] = "0" + stripped
+    if digits:
+        data["landlinePhone"] = digits
 
 
 def _fix_mobile_phone(data: dict) -> None:
-    """Ensure mobilePhone digits start with '05', correcting OCR misreads.
-
-    Israeli mobile numbers are always 05X-XXXXXXX (10 digits starting with 05).
-    If OCR produced a leading digit other than '05' (e.g. '06', '03', or a bare
-    '5' with the leading zero dropped), patch the prefix to '05'.
-    """
+    """Strip non-digit characters from mobilePhone; preserve digit content for validation."""
     raw = str(data.get("mobilePhone") or "")
     digits = re.sub(r"\D", "", raw)
-    if not digits:
-        return
-    if digits.startswith("05"):
-        return
-    if digits.startswith("5"):
-        # leading zero dropped by OCR
-        digits = "0" + digits
-    else:
-        # wrong prefix — replace first two digits with "05"
-        digits = "05" + digits[2:]
-    data["mobilePhone"] = digits
+    if digits:
+        data["mobilePhone"] = digits
 
 
 _EMPTY_EXTRACTION: dict = {

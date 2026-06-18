@@ -32,12 +32,29 @@ _BACKOFF_BASE = 2.0  # seconds
 
 
 @dataclass
+class WordBox:
+    """One OCR word with its bounding box, in page-1 coordinate units.
+
+    bbox is (x0, y0, x1, y1) in the page's reported unit (inch for PDFs, pixel
+    for images). Consumers scale to rendered pixels via page_width/page_height.
+    """
+    content: str
+    confidence: float
+    bbox: tuple[float, float, float, float]
+
+
+@dataclass
 class OCRResult:
     markdown: str
     word_confidences: list[tuple[str, float]] = field(default_factory=list)
     avg_confidence: float = 1.0
     min_confidence: float = 1.0
     page_count: int = 0
+    # Geometry of page 1 (the only analyzed page) — used by the vision corrector
+    # to crop the source image down to a single field's region before re-reading.
+    words: list[WordBox] = field(default_factory=list)
+    page_width: float = 0.0
+    page_height: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +108,8 @@ def analyze_document(file_bytes: bytes, filename: str) -> OCRResult:
     word_confidences = _extract_word_confidences(result)
     avg_conf, min_conf = _aggregate_confidence(word_confidences)
     page_count = len(result.pages) if result.pages else 0
+    words = _extract_word_boxes(result)
+    page_width, page_height = _page_dimensions(result)
 
     logger.info(
         "OCR analysis complete",
@@ -110,6 +129,9 @@ def analyze_document(file_bytes: bytes, filename: str) -> OCRResult:
         avg_confidence=avg_conf,
         min_confidence=min_conf,
         page_count=page_count,
+        words=words,
+        page_width=page_width,
+        page_height=page_height,
     )
 
 
@@ -180,3 +202,37 @@ def _aggregate_confidence(word_confidences: list[tuple[str, float]]) -> tuple[fl
         return 1.0, 1.0
     scores = [c for _, c in word_confidences]
     return sum(scores) / len(scores), min(scores)
+
+
+def _polygon_to_bbox(polygon) -> tuple[float, float, float, float] | None:
+    """Layout polygons are a flat [x1,y1,x2,y2,x3,y3,x4,y4] list; reduce to an
+    axis-aligned (x0, y0, x1, y1) bounding box. Returns None if absent/malformed."""
+    if not polygon or len(polygon) < 8:
+        return None
+    xs = polygon[0::2]
+    ys = polygon[1::2]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _extract_word_boxes(result) -> list[WordBox]:
+    """Collect each word's text + confidence + bounding box from all pages."""
+    boxes: list[WordBox] = []
+    for page in result.pages or []:
+        for word in page.words or []:
+            bbox = _polygon_to_bbox(getattr(word, "polygon", None))
+            if bbox is None:
+                continue
+            conf = float(word.confidence) if word.confidence is not None else 1.0
+            boxes.append(WordBox(content=word.content, confidence=conf, bbox=bbox))
+    return boxes
+
+
+def _page_dimensions(result) -> tuple[float, float]:
+    """Width/height of page 1 (the only analyzed page), in its reported unit."""
+    pages = result.pages or []
+    if not pages:
+        return 0.0, 0.0
+    first = pages[0]
+    width = float(first.width) if first.width else 0.0
+    height = float(first.height) if first.height else 0.0
+    return width, height

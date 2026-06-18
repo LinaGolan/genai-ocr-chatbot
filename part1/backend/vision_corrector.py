@@ -13,7 +13,9 @@ IMAGE:
 
 Flow:  OCR -> extract -> [correct_and_validate] -> result
     a. collect the trigger fields (low-confidence ∪ validation failures);
-    b. one GPT-4o vision call re-reads ONLY those fields from the image;
+    b. GPT-4o vision re-reads ONLY those fields — each from a crop of the page
+       zoomed to that field's region (located via OCR word boxes), falling back to
+       the full page for fields that can't be located confidently;
     c. verified values are written back and the whole record is validated again;
     d. any field that STILL fails validation is kept as-is and its issue is noted
        — in the logs and (via the validation reason) in the UI.
@@ -24,6 +26,7 @@ no frameworks. The single openai_client lives in shared/azure_client.py.
 
 import base64
 import copy
+import io
 import json
 import re
 import time
@@ -31,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 import fitz  # PyMuPDF — rasterise PDF page 1 for the vision model
+from PIL import Image  # crop the rendered page down to a single field's region
 
 from openai import (
     APIConnectionError,
@@ -55,6 +59,33 @@ _LOW_CONF_THRESHOLD = 0.70   # must mirror validator._OCR_LOW_THRESHOLD
 _RENDER_DPI = 200            # PDF rasterisation quality for the vision read
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 2.0          # seconds
+# Cap fields per vision call: the page image dominates cost and is re-sent each
+# call, so batching is cheap — but reading too many fields in one call makes the
+# model read each cursorily (worst on the poor scans that flag the most fields).
+# Chunking bounds per-call field count; a clean form still resolves in one call.
+# (Only the full-page fallback batches; located fields get a focused crop each.)
+_MAX_FIELDS_PER_VISION_CALL = 6
+
+# --- Field-region cropping ---------------------------------------------------
+# We locate a flagged field on the page from its OCR word boxes and send GPT-4o a
+# zoomed crop instead of the whole page: higher effective resolution on the exact
+# digits/handwriting (accuracy) and a fraction of the image tokens (cost). When a
+# field can't be located confidently we fall back to the full page — a mislocated
+# crop would be worse than no crop, so location is deliberately conservative.
+_REGION_PAD_FRAC = 0.04        # pad the located box by this fraction of page size
+_MAX_REGION_AREA_FRAC = 0.5    # matches spanning >half the page are deemed unreliable
+_MAX_WORDS_PER_TOKEN = 3       # a token hitting more words than this is too ambiguous
+
+# Selection / checkbox fields are NEVER cropped to their value's location: every
+# option's label is printed on the page, so locating by the (possibly wrong)
+# extracted value crops to that option and biases vision into confirming it
+# instead of seeing the whole option row and re-judging which box is ticked. These
+# always get the full page — which is the entire point of re-reading them.
+_NO_CROP_FIELDS = frozenset({
+    "gender",
+    "accidentLocation",
+    "medicalInstitutionFields.healthFundMember",
+})
 
 # Fields whose extracted value is matched word-by-word against OCR confidences
 # (mirrors validator Signal 2's per-word checks).
@@ -100,7 +131,17 @@ def correct_and_validate(
     """
     low_conf = find_low_confidence_fields(extracted, ocr_result)
     failed = failing_fields(extracted)
-    targets = list(dict.fromkeys([*low_conf, *sorted(failed)]))  # de-dupe, keep order
+    # Signature presence is a visual call OCR text can't make reliably and tends to
+    # over-claim. Verify it from the image whenever the extractor claimed one exists
+    # (asymmetric: catches false positives at the cost of one field, only when claimed).
+    claimed_signature = ["signature"] if str(extracted.get("signature", "")).strip() else []
+    # healthFundMember comes from a checkbox row whose order OCR routinely garbles (it
+    # attaches the ☒ to the wrong HMO), so the OCR-text read is unreliable — always
+    # re-read it from the image.
+    always_verify = ["medicalInstitutionFields.healthFundMember"]
+    targets = list(dict.fromkeys(
+        [*low_conf, *sorted(failed), *claimed_signature, *always_verify]
+    ))  # de-dupe, keep order
 
     if not targets:
         return extracted, validate(extracted, ocr_result=ocr_result)
@@ -172,8 +213,8 @@ def _reread_fields(
     never blocks the pipeline.
     """
     try:
-        data_url = _to_image_data_url(file_bytes, filename)
-        review = _with_backoff(lambda: _call_vision(data_url, targets, extracted))
+        full_img = _render_full_page_image(file_bytes, filename)
+        review = _gather_reviews(full_img, targets, extracted, ocr_result)
     except Exception as exc:
         logger.warning("Vision re-read skipped", extra={"error": str(exc)[:200]})
         return extracted, {}
@@ -199,6 +240,108 @@ def _reread_fields(
     return corrected, corrections
 
 
+def _gather_reviews(
+    full_img: Image.Image, targets: list[str], extracted: dict, ocr_result
+) -> dict:
+    """Re-read each target, cropping the page to the field's region when we can
+    locate it (one focused call per field) and falling back to the full page —
+    batched — for fields we can't locate. Results merge into one {field: value} map.
+    """
+    review: dict = {}
+    unlocated: list[str] = []
+
+    for path in targets:
+        box = _locate_field_region(path, extracted, ocr_result, full_img.size)
+        if box is None:
+            unlocated.append(path)
+            continue
+        crop_url = _pil_to_data_url(full_img.crop(box))
+        review.update(_with_backoff(lambda u=crop_url, p=path: _call_vision(u, [p], extracted)))
+
+    if unlocated:
+        full_url = _pil_to_data_url(full_img)
+        for start in range(0, len(unlocated), _MAX_FIELDS_PER_VISION_CALL):
+            chunk = unlocated[start:start + _MAX_FIELDS_PER_VISION_CALL]
+            review.update(_with_backoff(lambda u=full_url, c=chunk: _call_vision(u, c, extracted)))
+
+    logger.info(
+        "Vision re-read dispatch",
+        extra={"cropped_fields": len(targets) - len(unlocated), "fullpage_fields": len(unlocated)},
+    )
+    return review
+
+
+def _locate_field_region(
+    path: str, extracted: dict, ocr_result, img_size: tuple[int, int]
+) -> tuple[int, int, int, int] | None:
+    """Find the pixel-space crop box for *path* on the rendered page, or None.
+
+    Matches the field's extracted value against OCR word boxes, unions the hits,
+    scales page units → rendered pixels (via page_width/height — unit-agnostic),
+    and pads. Returns None when the field can't be located confidently, so the
+    caller falls back to the full page rather than crop the wrong spot.
+    """
+    if path in _NO_CROP_FIELDS:
+        return None  # selection field — must see the whole option row, never a value-located crop
+    if ocr_result is None or not ocr_result.words:
+        return None
+    if not (ocr_result.page_width and ocr_result.page_height):
+        return None
+
+    candidates = _match_candidates(_current_display(extracted, path))
+    if not candidates:
+        return None
+
+    matched: list = []
+    for cand in candidates:
+        hits = [w for w in ocr_result.words if _norm(w.content) == cand]
+        if 0 < len(hits) <= _MAX_WORDS_PER_TOKEN:
+            matched.extend(hits)
+    if not matched:
+        return None
+
+    sx = img_size[0] / ocr_result.page_width
+    sy = img_size[1] / ocr_result.page_height
+    x0 = min(w.bbox[0] for w in matched) * sx
+    y0 = min(w.bbox[1] for w in matched) * sy
+    x1 = max(w.bbox[2] for w in matched) * sx
+    y1 = max(w.bbox[3] for w in matched) * sy
+
+    if (x1 - x0) * (y1 - y0) > _MAX_REGION_AREA_FRAC * img_size[0] * img_size[1]:
+        return None  # scattered match across the page — not a single field region
+
+    pad_x = _REGION_PAD_FRAC * img_size[0]
+    pad_y = _REGION_PAD_FRAC * img_size[1]
+    box = (
+        max(0, x0 - pad_x),
+        max(0, y0 - pad_y),
+        min(img_size[0], x1 + pad_x),
+        min(img_size[1], y1 + pad_y),
+    )
+    return tuple(int(round(v)) for v in box)
+
+
+def _match_candidates(value: str) -> list[str]:
+    """Normalised strings to look for in OCR words: the whole value, its digit run
+    (for IDs / phones / concatenated dates), and each token. Short, ambiguous
+    fragments are dropped to avoid matching unrelated words."""
+    value = value.strip()
+    if not value:
+        return []
+    cands: set[str] = set()
+    full = _norm(value)
+    if full:
+        cands.add(full)
+    digits = re.sub(r"\D", "", value)
+    if len(digits) >= 4:
+        cands.add(digits)
+    for tok in re.split(r"[\s/.\-]+", value):
+        tok_n = _norm(tok)
+        if len(tok_n) >= 2:
+            cands.add(tok_n)
+    return [c for c in cands if c]
+
+
 def _apply_reread(corrected: dict, path: str, old: str, raw: str) -> str:
     """Write a re-read value back into *corrected*; return the outcome label.
 
@@ -206,6 +349,16 @@ def _apply_reread(corrected: dict, path: str, old: str, raw: str) -> str:
     - "confirmed" : model agrees with the existing value
     - "corrected" : model returned a different, legible value → written back
     """
+    if path == "signature":
+        # Presence field: vision is authoritative and "" is a real verdict (no
+        # signature), so it must overwrite a false-positive rather than be treated
+        # as "unread". Normalise any non-empty reading to the canonical "קיימת".
+        new = "קיימת" if raw else ""
+        if new == old:
+            return "confirmed"
+        _set_path(corrected, path, new)
+        return "corrected"
+
     if not raw:
         return "unread"
 
@@ -311,21 +464,27 @@ def _with_backoff(fn):
 # Image preparation
 # ---------------------------------------------------------------------------
 
-def _to_image_data_url(file_bytes: bytes, filename: str) -> str:
-    """Turn the uploaded file into a base64 image data URL for the vision API.
-
-    JPGs are sent as-is; PDFs are rasterised — page 1 only, matching the OCR step
-    (ocr_client analyses pages="1"). GPT-4o vision cannot read a PDF directly.
+def _render_full_page_image(file_bytes: bytes, filename: str) -> Image.Image:
+    """Render the uploaded file to a PIL image of page 1 (matching the OCR step,
+    which analyses pages="1"). PDFs are rasterised at _RENDER_DPI; JPGs are opened
+    as-is. The image is returned so callers can crop it per field before encoding.
     """
     suffix = Path(filename).suffix.lower()
     if suffix in (".jpg", ".jpeg"):
-        return "data:image/jpeg;base64," + base64.b64encode(file_bytes).decode()
+        return Image.open(io.BytesIO(file_bytes)).convert("RGB")
     if suffix == ".pdf":
         with fitz.open(stream=file_bytes, filetype="pdf") as doc:
             pixmap = doc.load_page(0).get_pixmap(dpi=_RENDER_DPI)
             png_bytes = pixmap.tobytes("png")
-        return "data:image/png;base64," + base64.b64encode(png_bytes).decode()
+        return Image.open(io.BytesIO(png_bytes)).convert("RGB")
     raise ValueError(f"Unsupported file type for vision correction: {suffix!r}")
+
+
+def _pil_to_data_url(img: Image.Image) -> str:
+    """Encode a PIL image as a base64 PNG data URL for the vision API."""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 # ---------------------------------------------------------------------------
