@@ -16,10 +16,37 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import asyncio
+import re
 
 import streamlit as st
 
 from part2.frontend.api_client import ChatAPIClient, ChatAPIError
+
+# Hebrew canonical HMO/tier values → English display names (for English chats).
+# The stored user_info keeps the Hebrew values; these are display-only.
+_HMO_DISPLAY_EN = {"מכבי": "Maccabi", "מאוחדת": "Meuhedet", "כללית": "Clalit"}
+_TIER_DISPLAY_EN = {"זהב": "Gold", "כסף": "Silver", "ארד": "Bronze"}
+
+_LATIN_RE = re.compile(r"[A-Za-z]")
+_HEBREW_RE = re.compile(r"[֐-׿]")
+
+
+def _user_wrote_english() -> bool:
+    """
+    Detect the conversation language from the user's FIRST lettered message — the
+    same language the backend locked onto — so the transition card matches the
+    rest of collection. Digits-only answers (an ID, a card number) carry no script
+    and are skipped. Defaults to Hebrew.
+    """
+    for msg in st.session_state.get("messages", []):
+        if msg.get("role") != "user":
+            continue
+        text = msg.get("content", "")
+        latin = len(_LATIN_RE.findall(text))
+        hebrew = len(_HEBREW_RE.findall(text))
+        if latin or hebrew:
+            return latin > hebrew
+    return False
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -142,18 +169,22 @@ def _render_confirmation() -> None:
         # Reset history for the Q&A phase (collection chat is no longer relevant).
         st.session_state.conversation_history = []
         name = edited.get("firstName", "")
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": (
-                    f"תודה {name}! ✅ הפרטים נשמרו. אפשר לשאול אותי כל שאלה על "
-                    f"השירותים הרפואיים ב{edited.get('hmo','')} במסלול "
-                    f"{edited.get('insuranceTier','')}.\n\n"
-                    f"_(Thanks {name}! You can now ask me anything about your "
-                    f"medical services.)_"
-                ),
-            }
-        )
+        hmo = edited.get("hmo", "")
+        tier = edited.get("insuranceTier", "")
+        if _user_wrote_english():
+            hmo_en = _HMO_DISPLAY_EN.get(hmo, hmo)
+            tier_en = _TIER_DISPLAY_EN.get(tier, tier)
+            transition = (
+                f"Thanks {name}! ✅ Your details are saved. You can now ask me "
+                f"anything about your medical services with {hmo_en} on the "
+                f"{tier_en} tier."
+            )
+        else:
+            transition = (
+                f"תודה {name}! ✅ הפרטים נשמרו. אפשר לשאול אותי כל שאלה על "
+                f"השירותים הרפואיים ב{hmo} במסלול {tier}."
+            )
+        st.session_state.messages.append({"role": "assistant", "content": transition})
         st.rerun()
 
 

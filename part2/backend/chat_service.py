@@ -3,10 +3,20 @@ from __future__ import annotations
 """
 LLM orchestration for both chatbot phases.
 
-  run_collection() — GPT-4o Mini drives the 8-field info-collection conversation
-                     and signals completion via a <user_info>{...}</user_info> block.
-  run_qa()         — GPT-4o answers from HMO-filtered knowledge retrieved by
-                     knowledge_base.retrieve().
+  run_collection() — two GPT-4o Mini calls per turn: a dedicated json_object
+                     extraction call produces the authoritative field state, which
+                     a code-side validator (collection_validation.py) checks; a
+                     second conversational call, steered by a status note built from
+                     that result, produces the user-facing reply. Mini never judges
+                     values; the backend decides completion when all 8 are valid.
+  run_qa()         — GPT-4o Mini answers from a single retrieved topic file, with
+                     escalation to GPT-4o over all of the HMO/tier's files.
+
+Model strategy: keep the cheap GPT-4o Mini on the common paths (collection, query
+translation, single-file Q&A) and spend GPT-4o only on the hard cross-topic Q&A
+fallback. Mini is made reliable on collection by moving the deterministic checks
+(9-digit ID/card, age 0–120, HMO/tier enum) into code instead of trusting the
+model to count digits — see collection_validation.py.
 
 The backend stays stateless: every call receives the full conversation history
 and (for Q&A) the confirmed user_info from the request payload.
@@ -24,25 +34,23 @@ from shared.azure_client import (
 )
 from shared.logger import get_logger, hash_id
 from part2.backend import knowledge_base as kb
+from part2.backend.collection_validation import (
+    field_errors,
+    missing_fields,
+    is_complete_and_valid,
+    format_validation_feedback,
+)
 from part2.backend.prompts import (
     COLLECTION_SYSTEM_PROMPT,
+    COLLECTION_EXTRACTION_PROMPT,
     QA_SYSTEM_PROMPT_TEMPLATE,
     QA_SINGLE_TOPIC_PROMPT_TEMPLATE,
     INSUFFICIENT_CONTEXT_SIGNAL,
     QUERY_TRANSLATION_PROMPT,
     NO_KNOWLEDGE_PLACEHOLDER,
-    USER_INFO_OPEN,
-    USER_INFO_CLOSE,
 )
 
 logger = get_logger(__name__)
-
-# Matches the completion block the collection model emits. DOTALL so the JSON
-# may span lines; non-greedy so we stop at the first closing tag.
-USER_INFO_PATTERN = re.compile(
-    re.escape(USER_INFO_OPEN) + r"\s*(\{.*?\})\s*" + re.escape(USER_INFO_CLOSE),
-    re.DOTALL,
-)
 
 _REQUIRED_FIELDS = (
     "firstName", "lastName", "idNumber", "gender",
@@ -68,71 +76,113 @@ async def run_collection(
         "phase": "collection" | "confirmation",
       }
     """
-    messages = (
-        [{"role": "system", "content": COLLECTION_SYSTEM_PROMPT}]
-        + _sanitize_history(history)
-        + [{"role": "user", "content": user_message}]
-    )
+    convo = _sanitize_history(history) + [{"role": "user", "content": user_message}]
 
-    # GPT-4o (not Mini) drives collection: inline validation requires reliable
-    # digit counting (ID / card = 9 digits, age 0–120), and GPT-4o Mini routinely
-    # miscounts digits — falsely rejecting valid 9-digit IDs. Correctness of the
-    # required field validation outweighs Mini's lower cost for this low-volume flow.
+    # Two cheap GPT-4o Mini calls per turn, decoupling extraction from chat:
+    #   1. _extract_state — a dedicated json_object call whose output IS the
+    #      authoritative state. The conversational model used to "forget" to keep a
+    #      running block up to date (so an 8-digit ID surfaced only at the end);
+    #      doing extraction as its own focused task fixes that.
+    #   2. validate the extracted state in code (digit/range/enum), then
+    #   3. _collection_reply — the user-facing turn, STEERED by a status note built
+    #      from the validation result (ask next fields / fix invalid ones / wrap up).
+    # Completion is decided here in code, never by the chat model.
     t0 = time.perf_counter()
-    response = await async_openai_client.chat.completions.create(
-        model=GPT4O_DEPLOYMENT,
-        messages=messages,
-        temperature=0.3,
-    )
-    elapsed = time.perf_counter() - t0
 
-    raw_reply = response.choices[0].message.content or ""
-    user_info, visible_reply = _extract_user_info(raw_reply)
-    phase = "confirmation" if user_info else "collection"
+    state = await _extract_state(convo)
+    errors = field_errors(state)
+    missing = missing_fields(state)
+    complete = is_complete_and_valid(state)
+
+    reply, response = await _collection_reply(convo, history, user_message, errors, missing, complete)
+    user_info = _normalize_user_info(state) if complete else None
 
     logger.info(
         "Collection turn complete",
         extra={
-            "phase": phase,
-            "complete": user_info is not None,
-            "latency_s": round(elapsed, 2),
+            "phase": "confirmation" if complete else "collection",
+            "complete": complete,
+            "invalid_fields": [e.split(":", 1)[0] for e in errors] or None,
+            "missing": missing or None,
+            "latency_s": round(time.perf_counter() - t0, 2),
             "tokens": _usage(response),
         },
     )
-    return {"reply": visible_reply, "user_info": user_info, "phase": phase}
+    return {
+        "reply": reply,
+        "user_info": user_info,
+        "phase": "confirmation" if complete else "collection",
+    }
 
 
-def _extract_user_info(reply: str) -> tuple[dict | None, str]:
+async def _extract_state(convo: list[dict[str, str]]) -> dict:
     """
-    Look for the <user_info> completion block. On success return
-    (parsed_and_validated_dict, reply_with_block_removed). Otherwise (None, reply).
-    A malformed or incomplete block is treated as not-yet-complete.
+    Extract the 8 collected fields from the conversation with a dedicated
+    json_object Mini call. This output — not the chat model's prose — is the
+    authoritative state the backend validates. On any failure, return an all-empty
+    state so collection simply continues rather than crashing.
     """
-    match = USER_INFO_PATTERN.search(reply)
-    if not match:
-        return None, reply.strip()
-
+    messages = [{"role": "system", "content": COLLECTION_EXTRACTION_PROMPT}] + convo
     try:
-        data = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        logger.warning("Found <user_info> block but JSON failed to parse")
-        return None, _strip_block(reply)
+        response = await async_openai_client.chat.completions.create(
+            model=GPT4O_MINI_DEPLOYMENT,
+            messages=messages,
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(response.choices[0].message.content or "{}")
+    except Exception as exc:  # noqa: BLE001 — collection must still proceed
+        logger.warning("State extraction failed; treating as empty", extra={"error": str(exc)[:150]})
+        return {f: "" for f in _REQUIRED_FIELDS}
+    if not isinstance(data, dict):
+        return {f: "" for f in _REQUIRED_FIELDS}
+    return {f: data.get(f, "") for f in _REQUIRED_FIELDS}
 
-    missing = [f for f in _REQUIRED_FIELDS if f not in data or data[f] in ("", None)]
-    if missing:
-        logger.warning("Incomplete <user_info> block", extra={"missing": missing})
-        return None, _strip_block(reply)
 
-    normalized = _normalize_user_info(data)
-    return normalized, _strip_block(reply)
+async def _collection_reply(
+    convo: list[dict[str, str]],
+    history: list[dict[str, str]],
+    user_message: str,
+    errors: list[str],
+    missing: list[str],
+    complete: bool,
+) -> tuple[str, Any]:
+    """
+    Produce the user-facing collection turn, steered by a code-built STATUS note
+    (validation errors / still-missing fields / complete) plus a code-computed
+    language directive. Returns (reply, response).
+    """
+    system_prompt = (
+        COLLECTION_SYSTEM_PROMPT
+        + "\n\n=== STATUS (authoritative — follow this) ===\n"
+        + _collection_status_directive(errors, missing, complete)
+        + "\n\n=== RESPONSE LANGUAGE (authoritative — overrides everything above) ===\n"
+        + _collection_language_directive(history, user_message)
+    )
+    response = await async_openai_client.chat.completions.create(
+        model=GPT4O_MINI_DEPLOYMENT,
+        messages=[{"role": "system", "content": system_prompt}] + convo,
+        temperature=0.3,
+    )
+    return (response.choices[0].message.content or "").strip(), response
 
 
-def _strip_block(reply: str) -> str:
-    """Remove the machine-readable block so the user never sees raw tags."""
-    cleaned = USER_INFO_PATTERN.sub("", reply).strip()
-    # Defensive: drop any dangling open tag if the model malformed the block.
-    cleaned = cleaned.replace(USER_INFO_OPEN, "").replace(USER_INFO_CLOSE, "").strip()
-    return cleaned
+def _collection_status_directive(errors: list[str], missing: list[str], complete: bool) -> str:
+    """The per-turn instruction telling the chat model what to do, from validation."""
+    if errors:
+        return format_validation_feedback(errors)
+    if complete:
+        return (
+            "All 8 required fields are collected and valid. Reply with ONE short, warm "
+            "sentence telling the user that's everything and they can review their details "
+            "in the summary below. Do NOT list the values back and do NOT ask them to confirm "
+            "— the app shows a confirmation screen for that. Ask no further questions."
+        )
+    return (
+        "Collection is still in progress. Fields still NEEDED (internal keys): "
+        f"{', '.join(missing)}. Ask the user for ONE or TWO of these still-missing fields, "
+        "conversationally and in their language. Never re-ask for a field already provided."
+    )
 
 
 def _normalize_user_info(data: dict) -> dict:
@@ -283,6 +333,7 @@ def _profile_kwargs(user_info: dict[str, Any]) -> dict[str, Any]:
 
 
 _LATIN_RE = re.compile(r"[A-Za-z]")
+_HEBREW_RE = re.compile(r"[֐-׿]")
 
 
 def _language_directive(user_message: str) -> str:
@@ -300,6 +351,37 @@ def _language_directive(user_message: str) -> str:
     return "כתוב את כל התשובה בעברית בלבד."
 
 
+def _is_english_conversation(history: list[dict[str, str]], user_message: str) -> bool:
+    """
+    Decide the collection reply language ONCE, from the dominant script of the
+    user's FIRST lettered message, and stick with it for the whole session. The
+    backend is stateless, so we recompute this each turn from the full history —
+    but because we always read the earliest lettered user message, the verdict is
+    stable and won't flip if a later answer happens to be in the other script or
+    is digits-only (an ID, a card number, an age carry no script). Defaults to
+    Hebrew when nothing decisive has been said yet (e.g. the opening greeting).
+    """
+    texts = [t["content"] for t in _sanitize_history(history) if t["role"] == "user"]
+    texts.append(user_message)
+    for text in texts:
+        latin = len(_LATIN_RE.findall(text))
+        hebrew = len(_HEBREW_RE.findall(text))
+        if latin or hebrew:
+            return latin > hebrew
+    return False
+
+
+def _collection_language_directive(history: list[dict[str, str]], user_message: str) -> str:
+    """
+    Code-computed reply-language command for collection — the same proven fix the
+    Q&A path uses. GPT-4o Mini otherwise drifts into Hebrew because the collection
+    prompt's field labels are Hebrew, ignoring the softer 'mirror the user' line.
+    """
+    if _is_english_conversation(history, user_message):
+        return "Write your ENTIRE reply to the user in English, even though the field labels above are in Hebrew."
+    return "כתוב את כל הפנייה אל המשתמש בעברית בלבד."
+
+
 async def _search_query(user_message: str) -> str:
     """
     Hebrew/other-script questions are used verbatim for retrieval. Questions that
@@ -310,8 +392,10 @@ async def _search_query(user_message: str) -> str:
     if not _LATIN_RE.search(user_message):
         return user_message
     try:
+        # GPT-4o Mini suffices for this narrow noun-extraction task — no digit
+        # counting or reasoning, just a few Hebrew keywords for the embedding step.
         response = await async_openai_client.chat.completions.create(
-            model=GPT4O_DEPLOYMENT,
+            model=GPT4O_MINI_DEPLOYMENT,
             temperature=0,
             messages=[
                 {"role": "system", "content": QUERY_TRANSLATION_PROMPT},
