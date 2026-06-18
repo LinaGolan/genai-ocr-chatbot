@@ -205,8 +205,8 @@ GPT-4o)" as shown above — no per-request filtering, and the common case stays 
 ### Run
 
 ```powershell
-# 0. one-time: build the Markdown knowledge base (rerun if the source HTML changes)
-python -m part2.backend.build_knowledge_base
+# 0. one-time : build the Markdown knowledge base (rerun if the source HTML changes)
+# python -m part2.backend.build_knowledge_base (knowledge base already in repo)
 
 # Terminal 1 — backend (embeds the 6 topics at startup)
 uvicorn part2.backend.main:app --reload --port 8000
