@@ -1,0 +1,33 @@
+{
+  "lastName": "Smith",
+  "firstName": "John",
+  "idNumber": "123456782",
+  "gender": "זכר",
+  "dateOfBirth": { "day": "15", "month": "03", "year": "1985" },
+  "address": {
+    "street": "42 Oak Street",
+    "houseNumber": "42",
+    "entrance": "A",
+    "apartment": "3",
+    "city": "Tel Aviv",
+    "postalCode": "6120001",
+    "poBox": ""
+  },
+  "landlinePhone": "036541234",
+  "mobilePhone": "0521234567",
+  "jobType": "Construction Worker",
+  "dateOfInjury": { "day": "10", "month": "06", "year": "2024" },
+  "timeOfInjury": "14:30",
+  "accidentLocation": "ת. דרכים בעבודה",
+  "accidentAddress": "42 Industrial Zone, Tel Aviv",
+  "accidentDescription": "Fell from scaffolding on third floor, landed on left arm",
+  "injuredBodyPart": "Left arm",
+  "signature": "קיימת",
+  "formFillingDate": { "day": "10", "month": "06", "year": "2024" },
+  "formReceiptDateAtClinic": { "day": "11", "month": "06", "year": "2024" },
+  "medicalInstitutionFields": {
+    "healthFundMember": "מאוחדת",
+    "natureOfAccident": "",
+    "medicalDiagnoses": "Fracture of left radius"
+  }
+}

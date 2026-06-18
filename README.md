@@ -11,6 +11,19 @@ Two independent systems that share one Azure resource layer, built with the
 Design docs live in [`docs/`](docs/): [shared infrastructure](docs/shared-infrastructure.md),
 [Part 1 extraction](docs/part1-extraction.md), [Part 2 chatbot](docs/part2-chatbot.md).
 
+### Which model (or code) does what
+
+Every step below is handled by exactly one of these — the design deliberately uses the
+**cheapest tool that's reliable** for each job, and pushes anything deterministic to plain code.
+
+| Tool | Where it's used |
+|---|---|
+| **Document Intelligence** (Layout API) | Part 1 — OCR of the form into Markdown + per-word confidence |
+| **GPT-4o** | Part 1 — field extraction & vision re-read of weak fields · Part 2 — offline KB build + the Q&A "all-topics" escalation |
+| **GPT-4o Mini** | Part 2 — collection (field extraction + chat reply) · default single-file Q&A · English→Hebrew query translation |
+| **ADA-002** (embeddings) | Part 2 — picking the relevant topic for a question |
+| **Plain code** (no model) | Part 1 — all validation · Part 2 — field validation, completion decision, language lock, HMO/tier routing |
+
 ---
 
 ## Prerequisites
@@ -64,6 +77,29 @@ Upload a PDF/JPG of a BL283 form. The UI shows the raw OCR (left) and the
 extracted JSON with per-field validation highlights (right). Hebrew and English
 forms are both supported; missing fields are returned as empty strings.
 
+### How it works (upload → JSON)
+
+```
+   PDF / JPG upload
+        │
+   ① file check ─────────── code            (type, size, page-count limits)
+        │
+   ② OCR ────────────────── Document Intelligence (Layout API)
+        │                                    → Markdown + per-word confidence
+   ③ extract fields ─────── GPT-4o           (OCR Markdown → JSON, Structured
+        │                                      Outputs, temperature 0)
+   ④ vision re-read ─────── GPT-4o (vision)  (only fields with low OCR
+        │                                      confidence or that fail a check —
+        │                                      re-read straight from the image)
+   ⑤ validate ───────────── code            (format + cross-field + confidence)
+        │
+   ⑥ show result ────────── Streamlit        (raw OCR + JSON + ERROR/CHECK badges)
+```
+
+Each value is always kept and shown as-is; problems are surfaced as badges, never
+silently "fixed" or dropped. Steps ③–④ are the only LLM calls; everything that can be
+decided by a rule (③ aside) is done in code.
+
 ### Validation
 
 Validation is **deterministic-first**: a field's extracted value is always kept and
@@ -102,26 +138,65 @@ A **stateless** FastAPI microservice with a Streamlit frontend. The frontend hol
 all session state and sends the full conversation history (and confirmed user info)
 with every request, so the backend keeps no per-user state and scales horizontally.
 
-**Flow:** the bot first collects 8 fields through natural, LLM-driven conversation
-(first/last name, ID, gender, age, HMO, card number, tier) with inline validation,
-shows a confirmation card, then answers questions for the user's HMO **and tier** —
-strictly from the knowledge base. If something isn't covered, it says so.
+There are two phases: **collection** (gather 8 user fields by conversation) and
+**Q&A** (answer from the knowledge base for that user's HMO + tier).
 
-### Knowledge base & retrieval
+### Phase 1 — collection (per user turn)
 
-The `phase2_data/*.html` pages are pre-rendered **offline** into one focused Markdown
-file per (HMO, tier, topic) — `phase2_data/processed/<hmo>/<tier>/<topic>.md`, 54
-files — by `build_knowledge_base.py` (GPT-4o, `temperature=0`, faithful copy of every
-number/contact). Each file already holds only that HMO+tier's content, so retrieval
-is cheap:
+The conversation is LLM-driven, but every value is checked by code — so the cheap
+mini model can drive it without being trusted to count digits (which it gets wrong).
 
-1. The user's HMO + tier select the **folder** — no search needed.
-2. **ADA-002** picks the most relevant **topic** for the question.
-3. **GPT-4o Mini** answers from that single file; if the answer isn't there it emits a
-   sentinel and the backend **escalates** to **GPT-4o** over all topics in the folder.
+```
+   user message
+        │
+   ① extract the 8 fields so far ── GPT-4o Mini   (dedicated JSON call — the
+        │                                           authoritative state)
+   ② validate + decide done ─────── code           (9-digit ID/card, age 0–120,
+        │                                           HMO/tier values; all 8 valid?)
+   ③ chat reply ─────────────────── GPT-4o Mini    (asks for what's missing, or to
+        │                                           fix a rejected value — steered
+        │                                           by a code-built status note)
+        ▼
+   all 8 valid?  ──► confirmation card ── Streamlit  (user reviews & edits, then
+                                                       confirms → Phase 2)
+```
 
-The common case stays cheap (one small file + the mini model), while a wrong topic
-guess or a cross-topic question still gets answered from the full HMO/tier context.
+Reply language is **locked to the user's first message** (code), and the field choices
+(HMO/tier) are shown in that language. The model never decides validity or completion —
+code does both.
+
+### Phase 2 — Q&A (per question)
+
+```
+   user question
+        │
+   ① (English only) → Hebrew keywords ── GPT-4o Mini   (KB is Hebrew; helps matching)
+        │
+   ② pick the topic ─────────────────── ADA-002         (embed query, rank 6 topics)
+        │  + pick the folder ─────────── code            (from the user's HMO + tier)
+        │
+   ③ answer from that one file ──────── GPT-4o Mini     (or emit a sentinel if the
+        │                                                 answer isn't in it)
+        │
+   ④ if insufficient → answer over ──── GPT-4o           (all 6 topic files for the
+        all topics in the folder                          user's HMO/tier)
+```
+
+Answers come **only** from the knowledge base, already scoped to the user's HMO **and
+tier**; if it's not covered, the bot says so. Response language is forced to match the
+question (code-computed directive).
+
+### Where the knowledge base comes from (offline build)
+
+The Q&A flow above is cheap because the knowledge is pre-shaped **once, offline**. The
+`phase2_data/*.html` pages (each covering all 3 HMOs × 3 tiers in one table) are
+rewritten by `build_knowledge_base.py` (**GPT-4o**, `temperature=0`, faithful copy of
+every number/contact) into one focused Markdown file per (HMO, tier, topic):
+`phase2_data/processed/<hmo>/<tier>/<topic>.md` — **54 files**.
+
+Because each file already holds only that HMO+tier's content, request-time retrieval is
+just "pick the folder (code) → pick the topic (ADA-002) → answer (Mini, escalate to
+GPT-4o)" as shown above — no per-request filtering, and the common case stays cheap.
 
 ### Run
 
@@ -153,6 +228,9 @@ API (also documented at `http://localhost:8000/docs`):
 
 All activity is logged as JSON lines via the shared `get_logger` factory
 (`logs/part1.log`, `logs/part2.log`): requests, latency, the selected topic and
-whether the answer escalated, and errors. ID numbers are SHA-256 hashed before
-logging — **no raw PII is ever written**.
+whether the answer escalated, and errors. Every LLM call also logs **which model
+served it, token usage, and the `finish_reason`** (with a warning if a response was
+truncated or content-filtered) — so the model/cost split described above is
+measurable, not just claimed. ID numbers are SHA-256 hashed before logging —
+**no raw PII is ever written**.
 ```

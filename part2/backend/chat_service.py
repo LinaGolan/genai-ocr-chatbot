@@ -130,6 +130,7 @@ async def _extract_state(convo: list[dict[str, str]]) -> dict:
             temperature=0,
             response_format={"type": "json_object"},
         )
+        _log_response(response, "collection.extract")
         data = json.loads(response.choices[0].message.content or "{}")
     except Exception as exc:  # noqa: BLE001 — collection must still proceed
         logger.warning("State extraction failed; treating as empty", extra={"error": str(exc)[:150]})
@@ -164,6 +165,7 @@ async def _collection_reply(
         messages=[{"role": "system", "content": system_prompt}] + convo,
         temperature=0.3,
     )
+    _log_response(response, "collection.reply")
     return (response.choices[0].message.content or "").strip(), response
 
 
@@ -289,6 +291,7 @@ async def _answer_from_single(
         messages=messages,
         temperature=0.2,
     )
+    _log_response(response, "qa.single")
     raw = (response.choices[0].message.content or "").strip()
     if not raw or INSUFFICIENT_CONTEXT_SIGNAL in raw:
         return None
@@ -317,6 +320,7 @@ async def _answer_from_all(
         messages=messages,
         temperature=0.2,
     )
+    _log_response(response, "qa.fallback")
     return (response.choices[0].message.content or "").strip()
 
 
@@ -402,6 +406,7 @@ async def _search_query(user_message: str) -> str:
                 {"role": "user", "content": user_message},
             ],
         )
+        _log_response(response, "qa.translate")
         translated = (response.choices[0].message.content or "").strip()
         return translated or user_message
     except Exception as exc:  # noqa: BLE001 — retrieval must still proceed
@@ -437,8 +442,43 @@ def _usage(response) -> dict[str, int] | None:
     usage = getattr(response, "usage", None)
     if not usage:
         return None
-    return {
+    out = {
         "prompt": usage.prompt_tokens,
         "completion": usage.completion_tokens,
         "total": usage.total_tokens,
     }
+    # Prompt-cache hit count, when the API reports it (saves cost on repeated
+    # system prompts). Absent on older API versions, so guard for it.
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = getattr(details, "cached_tokens", None) if details else None
+    if cached:
+        out["cached"] = cached
+    return out
+
+
+def _log_response(response, call: str):
+    """
+    Per-call LLM telemetry — model, token usage, and finish_reason — plus a warning
+    when the model truncated its output (finish_reason 'length') or Azure's content
+    filter stopped it. Purely observational: returns the response unchanged and
+    never raises, so it can sit beside any call without affecting the flow.
+    """
+    try:
+        finish = getattr(response.choices[0], "finish_reason", None)
+    except (AttributeError, IndexError):
+        finish = None
+
+    logger.info(
+        "LLM call",
+        extra={
+            "call": call,
+            "model": getattr(response, "model", None),
+            "finish_reason": finish,
+            "tokens": _usage(response),
+        },
+    )
+    if finish == "length":
+        logger.warning("LLM output was truncated at the token limit", extra={"call": call})
+    elif finish == "content_filter":
+        logger.warning("LLM output was stopped by the content filter", extra={"call": call})
+    return response

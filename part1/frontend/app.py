@@ -36,8 +36,18 @@ _STATUS_BORDER = {"ok": "#43a047", "uncertain": "#fb8c00", "invalid": "#e53935"}
 _STATUS_BADGE  = {"ok": "#43a047", "uncertain": "#fb8c00", "invalid": "#e53935"}
 _STATUS_LABEL  = {"ok": "OK",      "uncertain": "CHECK",   "invalid": "ERROR"}
 _STATUS_ICON   = {"ok": "✅",       "uncertain": "⚠️",      "invalid": "❌"}
-_ACCURACY_COLOR = {"high": "#2e7d32", "medium": "#e65100", "low": "#c62828"}
-_ACCURACY_ICON  = {"high": "🟢",      "medium": "🟡",       "low": "🔴"}
+
+# Maps the (lowercase) start of a date-ordering reason to the two field keys involved.
+_DATE_COMPARISON_REASONS: dict[str, tuple[str, str, str, str]] = {
+    "date of birth is not before date of injury": (
+        "dateOfBirth", "Date of Birth", "dateOfInjury", "Date of Injury"),
+    "date of injury is after form filling date": (
+        "dateOfInjury", "Date of Injury", "formFillingDate", "Form Filling Date"),
+    "form receipt date at clinic is before date of injury": (
+        "formReceiptDateAtClinic", "Receipt at Clinic", "dateOfInjury", "Date of Injury"),
+    "form receipt date at clinic is before form filling date": (
+        "formReceiptDateAtClinic", "Receipt at Clinic", "formFillingDate", "Form Filling Date"),
+}
 
 _GLOBAL_CSS = """
 <style>
@@ -70,14 +80,15 @@ footer    { visibility: hidden; }
 # ---------------------------------------------------------------------------
 
 def _hero_html(title: str, subtitle: str) -> str:
-    # Outer padding-top gives the box-shadow room above the card so it isn't clipped.
     return (
-        '<div style="padding:10px 2px 2px">'
-        '<div style="background:linear-gradient(135deg,#1565c0 0%,#1976d2 55%,#42a5f5 100%);'
-        'border-radius:12px;padding:18px 22px 16px;color:white;'
-        'box-shadow:0 3px 14px rgba(21,101,192,0.22)">'
-        f'<div style="font-size:1.35rem;font-weight:700;letter-spacing:-0.2px;margin-bottom:6px">{title}</div>'
-        f'<p style="margin:0;opacity:0.88;font-size:0.85rem;line-height:1.5">{subtitle}</p>'
+        '<div style="padding:8px 2px 12px">'
+        '<div style="display:flex;align-items:flex-start;gap:14px">'
+        '<div style="width:4px;min-height:52px;background:linear-gradient(180deg,#1976d2 0%,#42a5f5 100%);'
+        'border-radius:3px;flex-shrink:0"></div>'
+        '<div>'
+        f'<div style="font-size:1.45rem;font-weight:700;color:#1a237e;letter-spacing:-0.3px;line-height:1.2">{title}</div>'
+        f'<p style="margin:6px 0 0;color:#607d8b;font-size:0.84rem;line-height:1.5">{subtitle}</p>'
+        '</div>'
         '</div>'
         '</div>'
     )
@@ -85,38 +96,58 @@ def _hero_html(title: str, subtitle: str) -> str:
 
 def _metric_cards_html(
     completeness: float,
-    total_validated: int,
+    total_n: int,
+    ok_n: int,
     invalid_n: int,
     uncertain_n: int,
 ) -> str:
-    issue_color = "#c62828" if invalid_n else ("#e65100" if uncertain_n else "#2e7d32")
-    cards = [
-        ("#1565c0", f"{completeness:.0%}",              "Completeness"),
-        ("#37474f", str(total_validated),               "Fields Validated"),
-        (issue_color, f"{invalid_n} ✗ / {uncertain_n} ⚠", "Issues"),
-    ]
-    items = "".join(
-        f'<div style="flex:1;background:white;border:1px solid #e8eaf6;border-radius:12px;'
-        f'padding:16px 20px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.07)">'
-        f'<div style="font-size:1.5rem;font-weight:700;color:{color};letter-spacing:-0.5px">{value}</div>'
-        f'<div style="font-size:0.7rem;color:#90a4ae;text-transform:uppercase;'
-        f'letter-spacing:0.7px;margin-top:3px">{label}</div>'
-        f'</div>'
-        for color, value, label in cards
+    def _std_card(color: str, value: str, label: str) -> str:
+        return (
+            f'<div style="flex:1;background:white;border:1px solid #e8eaf6;border-radius:12px;'
+            f'padding:16px 20px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.07)">'
+            f'<div style="font-size:1.5rem;font-weight:700;color:{color};letter-spacing:-0.5px">{value}</div>'
+            f'<div style="font-size:0.7rem;color:#90a4ae;text-transform:uppercase;'
+            f'letter-spacing:0.7px;margin-top:3px">{label}</div>'
+            f'</div>'
+        )
+
+    if not invalid_n and not uncertain_n:
+        issues_inner = (
+            '<div style="font-size:1.5rem;font-weight:700;color:#2e7d32">✓</div>'
+            '<div style="font-size:0.7rem;color:#90a4ae;text-transform:uppercase;'
+            'letter-spacing:0.7px;margin-top:3px">No Issues</div>'
+        )
+    else:
+        rows = ""
+        if invalid_n:
+            rows += (
+                f'<div style="font-size:1.05rem;font-weight:700;color:#c62828;line-height:1.4">'
+                f'{invalid_n} invalid</div>'
+            )
+        if uncertain_n:
+            rows += (
+                f'<div style="font-size:1.05rem;font-weight:700;color:#e65100;line-height:1.4">'
+                f'{uncertain_n} uncertain</div>'
+            )
+        issues_inner = (
+            rows +
+            '<div style="font-size:0.7rem;color:#90a4ae;text-transform:uppercase;'
+            'letter-spacing:0.7px;margin-top:4px">Issues</div>'
+        )
+
+    issues_card = (
+        '<div style="flex:1;background:white;border:1px solid #e8eaf6;border-radius:12px;'
+        'padding:16px 20px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.07)">'
+        + issues_inner
+        + '</div>'
+    )
+
+    items = (
+        _std_card("#1565c0", f"{completeness:.0%}", "Completeness")
+        + _std_card("#37474f", f"{ok_n} / {total_n}", "Fields Valid")
+        + issues_card
     )
     return f'<div style="display:flex;gap:12px;margin:10px 0 14px">{items}</div>'
-
-
-def _accuracy_badge_html(acc: str) -> str:
-    color = _ACCURACY_COLOR.get(acc, "#607d8b")
-    icon  = _ACCURACY_ICON.get(acc, "⚪")
-    return (
-        f'<div style="display:inline-flex;align-items:center;gap:8px;background:{color};'
-        f'color:white;padding:9px 20px;border-radius:22px;font-weight:700;font-size:0.92rem;'
-        f'letter-spacing:0.2px;box-shadow:0 3px 10px rgba(0,0,0,0.18);margin:4px 0 14px">'
-        f'{icon}&nbsp; Accuracy Estimate: {acc.upper()}'
-        f'</div>'
-    )
 
 
 def _section_header(title: str) -> str:
@@ -180,13 +211,14 @@ def _field_html(label: str, value: str, field_key: str, statuses: dict[str, Fiel
 # ---------------------------------------------------------------------------
 
 def _render_summary(val_result: ValidationResult) -> None:
-    invalid_n  = sum(1 for s in val_result.fields.values() if s.status == "invalid")
+    invalid_n   = sum(1 for s in val_result.fields.values() if s.status == "invalid")
     uncertain_n = sum(1 for s in val_result.fields.values() if s.status == "uncertain")
+    total_n     = len(val_result.fields)
+    ok_n        = total_n - invalid_n - uncertain_n
     st.markdown(
-        _metric_cards_html(val_result.completeness, len(val_result.fields), invalid_n, uncertain_n),
+        _metric_cards_html(val_result.completeness, total_n, ok_n, invalid_n, uncertain_n),
         unsafe_allow_html=True,
     )
-    st.markdown(_accuracy_badge_html(val_result.accuracy_estimate), unsafe_allow_html=True)
 
 
 def _render_json_panel(extracted: dict[str, Any], val_result: ValidationResult) -> None:
@@ -288,11 +320,36 @@ def _validation_source(reason: str) -> tuple[str, str]:
     return "✅", "Passed checks"
 
 
+def _date_pair_html(reason: str, extracted: dict) -> str:
+    """Return a small comparison block showing both conflicting dates, or '' if not applicable."""
+    r = reason.lower()
+    for prefix, (key_a, lbl_a, key_b, lbl_b) in _DATE_COMPARISON_REASONS.items():
+        if r.startswith(prefix):
+            def _fmt(d: Any) -> str:
+                if not d or not isinstance(d, dict):
+                    return "—"
+                return "/".join(filter(None, [d.get("day"), d.get("month"), d.get("year")])) or "—"
+            val_a = _fmt(extracted.get(key_a))
+            val_b = _fmt(extracted.get(key_b))
+            return (
+                f'<div style="margin:6px 0 6px;padding:7px 12px;background:#fff8e1;'
+                f'border-left:3px solid #fb8c00;border-radius:0 6px 6px 0;font-size:0.78rem;'
+                f'display:flex;gap:10px;flex-wrap:wrap;align-items:center">'
+                f'<span><span style="color:#607d8b;font-weight:600">{lbl_a}:</span>&nbsp;'
+                f'<code style="color:#c62828">{val_a}</code></span>'
+                f'<span style="color:#b0bec5">→</span>'
+                f'<span><span style="color:#607d8b;font-weight:600">{lbl_b}:</span>&nbsp;'
+                f'<code style="color:#1a237e">{val_b}</code></span>'
+                f'</div>'
+            )
+    return ""
+
+
 def _proof_card_html(
     fname: str,
     value: str,
     fstatus: FieldStatus,
-    word_conf: dict[str, float],
+    extracted: dict,
 ) -> str:
     status     = fstatus.status
     border     = _STATUS_BORDER.get(status, "#90a4ae")
@@ -302,65 +359,35 @@ def _proof_card_html(
     icon       = _STATUS_ICON.get(status, "")
     src_icon, src_label = _validation_source(fstatus.reason)
 
-    # ── OCR evidence column ──────────────────────────────────────────────────
-    ocr_parts: list[str] = []
+    # ── Extracted value column ───────────────────────────────────────────────
     if value:
-        for token in value.split():
-            clean = token.lower().strip(".,;:\"'()")
-            conf  = word_conf.get(clean)
-            if conf is None:
-                ocr_parts.append(
-                    f'<span style="color:#b0bec5;font-style:italic;font-size:0.8rem">'
-                    f'"{token}" not found</span>'
-                )
-            else:
-                if conf >= 0.90:
-                    pill_bg, pill_fg = "#e8f5e9", "#2e7d32"
-                elif conf >= 0.70:
-                    pill_bg, pill_fg = "#fff8e1", "#e65100"
-                else:
-                    pill_bg, pill_fg = "#ffebee", "#c62828"
-                ocr_parts.append(
-                    f'<span style="display:inline-flex;align-items:center;gap:4px;'
-                    f'background:{pill_bg};border:1px solid {pill_fg}33;'
-                    f'border-radius:5px;padding:2px 7px;margin:2px 2px 0 0;'
-                    f'font-family:monospace;font-size:0.8rem;color:#263238">'
-                    f'{token} <b style="color:{pill_fg}">{conf:.2f}</b></span>'
-                )
-    else:
-        ocr_parts.append('<span style="color:#b0bec5;font-style:italic;font-size:0.8rem">no value to look up</span>')
-    ocr_html = " ".join(ocr_parts)
-
-    # ── LLM output column ────────────────────────────────────────────────────
-    if value:
-        llm_html = (
+        val_display = (
             f'<span style="font-family:monospace;font-size:0.88rem;color:#1a237e;'
-            f'background:#e8eaf6;padding:4px 10px;border-radius:5px;'
+            f'background:#e8eaf6;padding:6px 12px;border-radius:6px;'
             f'display:inline-block;word-break:break-all;max-width:100%">{value}</span>'
         )
     else:
-        llm_html = '<span style="color:#b0bec5;font-style:italic;font-size:0.85rem">— empty —</span>'
+        val_display = '<span style="color:#b0bec5;font-style:italic;font-size:0.85rem">— empty —</span>'
 
     # ── Validation column ────────────────────────────────────────────────────
     reason_text = fstatus.reason or "Passed all checks"
-    val_html = (
-        f'<div style="margin-bottom:5px">'
+    date_pair   = _date_pair_html(fstatus.reason or "", extracted)
+    check_html = (
+        f'<div style="margin-bottom:6px">'
         f'<span style="background:{badge_bg};color:white;font-size:0.63rem;font-weight:700;'
         f'padding:2px 9px;border-radius:9px;letter-spacing:0.4px">{badge_text}</span>'
         f'</div>'
-        f'<div style="font-size:0.8rem;color:#546e7a;line-height:1.45;margin-bottom:6px">'
+        f'<div style="font-size:0.8rem;color:#546e7a;line-height:1.45;margin-bottom:4px">'
         f'{reason_text}</div>'
+        f'{date_pair}'
         f'<div style="font-size:0.7rem;color:#90a4ae">'
-        f'{src_icon} {src_label}</div>'
+        f'{src_icon}&nbsp;{src_label}</div>'
     )
 
-    col_style = (
-        'style="background:white;padding:12px 16px;'
-        'border-right:1px solid #f0f0f0;min-width:0"'
-    )
+    col_style = 'style="background:white;padding:14px 18px;min-width:0"'
     label_style = (
         'style="font-size:0.65rem;font-weight:700;text-transform:uppercase;'
-        'letter-spacing:0.7px;color:#90a4ae;margin-bottom:6px"'
+        'letter-spacing:0.7px;color:#90a4ae;margin-bottom:8px"'
     )
 
     return (
@@ -376,23 +403,17 @@ def _proof_card_html(
         f'padding:3px 10px;border-radius:10px;letter-spacing:0.5px">{badge_text}</span>'
         f'</div>'
 
-        # evidence grid
-        f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;'
-        f'background:#f5f5f5;gap:1px">'
+        # 2-column grid
+        f'<div style="display:grid;grid-template-columns:1fr 1fr;background:#f5f5f5;gap:1px">'
 
         f'<div {col_style}>'
-        f'<div {label_style}>📄 OCR Evidence</div>'
-        f'<div style="line-height:1.6">{ocr_html}</div>'
+        f'<div {label_style}>Extracted Value</div>'
+        f'<div style="line-height:1.6">{val_display}</div>'
         f'</div>'
 
         f'<div {col_style}>'
-        f'<div {label_style}>🤖 LLM Output</div>'
-        f'{llm_html}'
-        f'</div>'
-
-        f'<div style="background:white;padding:12px 16px;min-width:0">'
-        f'<div {label_style}>🔍 Validation</div>'
-        f'{val_html}'
+        f'<div {label_style}>Validation</div>'
+        f'{check_html}'
         f'</div>'
 
         f'</div>'  # grid
@@ -403,16 +424,10 @@ def _proof_card_html(
 def _render_validation_details(
     val_result: ValidationResult,
     extracted: dict,
-    ocr_result: OCRResult,
 ) -> None:
     if not val_result.fields:
         st.write("No fields were specifically validated.")
         return
-
-    word_conf: dict[str, float] = {
-        w.lower().strip(".,;:\"'()"): c
-        for w, c in ocr_result.word_confidences
-    }
 
     issues = {k: v for k, v in val_result.fields.items() if v.status != "ok"}
     if not issues:
@@ -425,7 +440,7 @@ def _render_validation_details(
     )
 
     cards_html = "\n".join(
-        _proof_card_html(fname, _get_field_value(extracted, fname), fstatus, word_conf)
+        _proof_card_html(fname, _get_field_value(extracted, fname), fstatus, extracted)
         for fname, fstatus in sorted_fields
     )
     st.markdown(cards_html, unsafe_allow_html=True)
@@ -453,7 +468,7 @@ def main() -> None:
     st.markdown(_GLOBAL_CSS, unsafe_allow_html=True)
 
     # ── Header: title left, uploader right ──────────────────────────────────
-    hdr_left, hdr_right = st.columns([2, 3], gap="large")
+    hdr_left, hdr_right = st.columns([3, 2], gap="large")
 
     with hdr_left:
         st.markdown(
@@ -478,9 +493,6 @@ def main() -> None:
             help="Accepted: PDF, JPG — max 50 MB",
             label_visibility="collapsed",
         )
-        if uploaded is not None:
-            if st.button("🔍 Extract Fields", type="primary"):
-                st.cache_data.clear()
 
     if uploaded is None:
         return
@@ -526,8 +538,8 @@ def main() -> None:
             json.dumps(extracted, ensure_ascii=False, indent=2),
             language="json",
         )
-        with st.expander("🔍 Validation details — with proof"):
-            _render_validation_details(val_result, extracted, ocr_result)
+        with st.expander("🔍 Validation details"):
+            _render_validation_details(val_result, extracted)
 
     # ── OCR output (collapsed) ───────────────────────────────────────────────
     with st.expander("📄 OCR Output (Document Intelligence)"):

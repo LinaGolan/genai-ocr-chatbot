@@ -1,0 +1,33 @@
+{
+  "lastName": "Johnson",
+  "firstName": "Sarah",
+  "idNumber": "987654324",
+  "gender": "נקבה",
+  "dateOfBirth": { "day": "22", "month": "08", "year": "1990" },
+  "address": {
+    "street": "15 Pine Avenue",
+    "houseNumber": "15",
+    "entrance": "B",
+    "apartment": "7",
+    "city": "Haifa",
+    "postalCode": "3200001",
+    "poBox": ""
+  },
+  "landlinePhone": "048765432",
+  "mobilePhone": "0529876543",
+  "jobType": "Software Developer",
+  "dateOfInjury": { "day": "03", "month": "11", "year": "2023" },
+  "timeOfInjury": "09:15",
+  "accidentLocation": "תאונה בדרך ללא רכב",
+  "accidentAddress": "Route 2 near Haifa interchange",
+  "accidentDescription": "Slipped on wet entrance floor, injured right knee",
+  "injuredBodyPart": "Right knee",
+  "signature": "קיימת",
+  "formFillingDate": { "day": "03", "month": "11", "year": "2023" },
+  "formReceiptDateAtClinic": { "day": "04", "month": "11", "year": "2023" },
+  "medicalInstitutionFields": {
+    "healthFundMember": "",
+    "natureOfAccident": "",
+    "medicalDiagnoses": "Right knee sprain, grade II"
+  }
+}

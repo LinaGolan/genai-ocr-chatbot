@@ -1,0 +1,33 @@
+{
+  "lastName": "זינה",
+  "firstName": "לוז",
+  "idNumber": "394055869",
+  "gender": "נקבה",
+  "dateOfBirth": { "day": "03", "month": "09", "year": "2024" },
+  "address": {
+    "street": "ניר",
+    "houseNumber": "22",
+    "entrance": "C",
+    "apartment": "4",
+    "city": "יס",
+    "postalCode": "44531",
+    "poBox": ""
+  },
+  "landlinePhone": "034566391",
+  "mobilePhone": "05566991110",
+  "jobType": "MMD",
+  "dateOfInjury": { "day": "03", "month": "09", "year": "2024" },
+  "timeOfInjury": "10:12",
+  "accidentLocation": "ת. דרכים בדרך לעבודה/מהעבודה",
+  "accidentAddress": "",
+  "accidentDescription": "",
+  "injuredBodyPart": "",
+  "signature": "",
+  "formFillingDate": { "day": "03", "month": "07", "year": "2024" },
+  "formReceiptDateAtClinic": { "day": "03", "month": "07", "year": "2024" },
+  "medicalInstitutionFields": {
+    "healthFundMember": "מכבי",
+    "natureOfAccident": "",
+    "medicalDiagnoses": ""
+  }
+}
