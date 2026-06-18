@@ -15,6 +15,7 @@ All data models live in schema.py; this module is validation logic only.
 """
 
 import re
+from datetime import date
 from typing import Any, Literal
 
 from shared.logger import get_logger, hash_id
@@ -95,12 +96,30 @@ def failing_fields(extracted: dict[str, Any]) -> set[str]:
 # ---------------------------------------------------------------------------
 
 def _run_deterministic(extracted: dict, statuses: dict[str, FieldStatus]) -> None:
+    _check_required_fields(extracted, statuses)
     _check_id_number(extracted, statuses)
     _check_dates(extracted, statuses)
+    _check_future_dates(extracted, statuses)
     _check_date_ordering(extracted, statuses)
+    _check_time_of_injury(extracted, statuses)
     _check_phones(extracted, statuses)
     _check_postal(extracted, statuses)
     _check_gender(extracted, statuses)
+
+
+# Core identity fields the form is meaningless without; surfaced as an explicit
+# issue rather than only as a dip in the completeness metric.
+_REQUIRED_FIELDS = {
+    "idNumber":  "ID number",
+    "lastName":  "Last name",
+    "firstName": "First name",
+}
+
+
+def _check_required_fields(extracted: dict, statuses: dict) -> None:
+    for field_name, label in _REQUIRED_FIELDS.items():
+        if not extracted.get(field_name, ""):
+            statuses[field_name] = FieldStatus("uncertain", f"{label} is empty — expected on every form")
 
 
 def _check_id_number(extracted: dict, statuses: dict) -> None:
@@ -169,10 +188,26 @@ def _date_to_int(d: dict) -> int | None:
     return None
 
 
+def _check_future_dates(extracted: dict, statuses: dict) -> None:
+    """No form date can be in the future. A future year is almost always an OCR
+    misread, so flag as 'uncertain' (never override a deterministic 'invalid')."""
+    today = date.today().year * 10000 + date.today().month * 100 + date.today().day
+    for field_name in (
+        "dateOfBirth", "dateOfInjury", "formFillingDate", "formReceiptDateAtClinic",
+    ):
+        d = _date_to_int(extracted.get(field_name) or {})
+        if d and d > today:
+            if statuses.get(field_name, FieldStatus()).status != "invalid":
+                statuses[field_name] = FieldStatus(
+                    "uncertain", "Date is in the future"
+                )
+
+
 def _check_date_ordering(extracted: dict, statuses: dict) -> None:
     dob = _date_to_int(extracted.get("dateOfBirth") or {})
     doi = _date_to_int(extracted.get("dateOfInjury") or {})
     ffd = _date_to_int(extracted.get("formFillingDate") or {})
+    frd = _date_to_int(extracted.get("formReceiptDateAtClinic") or {})
 
     if dob and doi and dob >= doi:
         if statuses.get("dateOfBirth", FieldStatus()).status != "invalid":
@@ -184,6 +219,33 @@ def _check_date_ordering(extracted: dict, statuses: dict) -> None:
             statuses["dateOfInjury"] = FieldStatus(
                 "uncertain", "Date of injury is after form filling date"
             )
+    # Chain end: a form cannot reach the clinic before the injury or before it
+    # was filled. Both contradictions land on the receipt-date field.
+    if doi and frd and doi > frd:
+        if statuses.get("formReceiptDateAtClinic", FieldStatus()).status != "invalid":
+            statuses["formReceiptDateAtClinic"] = FieldStatus(
+                "uncertain", "Form receipt date at clinic is before date of injury"
+            )
+    elif ffd and frd and ffd > frd:
+        if statuses.get("formReceiptDateAtClinic", FieldStatus()).status != "invalid":
+            statuses["formReceiptDateAtClinic"] = FieldStatus(
+                "uncertain", "Form receipt date at clinic is before form filling date"
+            )
+
+
+def _check_time_of_injury(extracted: dict, statuses: dict) -> None:
+    """timeOfInjury is a time of day — sanity-check it parses to HH:MM in range.
+    Accepts 'HH:MM', 'H:MM' and bare 'HHMM'; flags anything else as 'uncertain'."""
+    val = extracted.get("timeOfInjury", "")
+    if not val:
+        return
+    m = re.fullmatch(r"\s*(\d{1,2}):?(\d{2})\s*", val)
+    if m and 0 <= int(m.group(1)) <= 23 and 0 <= int(m.group(2)) <= 59:
+        statuses.setdefault("timeOfInjury", FieldStatus("ok"))
+    else:
+        statuses["timeOfInjury"] = FieldStatus(
+            "uncertain", f"Unexpected time-of-injury format: {val!r}"
+        )
 
 
 def _check_phones(extracted: dict, statuses: dict) -> None:

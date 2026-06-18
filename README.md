@@ -64,6 +64,32 @@ Upload a PDF/JPG of a BL283 form. The UI shows the raw OCR (left) and the
 extracted JSON with per-field validation highlights (right). Hebrew and English
 forms are both supported; missing fields are returned as empty strings.
 
+### Validation
+
+Validation is **deterministic-first**: a field's extracted value is always kept and
+shown as-is, with any problem surfaced inline as an `ERROR` (invalid) or `CHECK`
+(uncertain) badge plus a one-line reason — e.g. a 10-digit ID is displayed unchanged
+with *"ID must be exactly 9 digits"*. Low-confidence OCR reads are first repaired by
+the vision corrector (GPT-4o re-reads them from the image); the remaining checks are:
+
+**Field-format checks**
+- **ID number** — must be exactly 9 digits (length only; no check-digit/checksum) → `invalid`.
+- **Dates** (birth / injury / filling / receipt) — day 1–31, month 1–12, plausible year 1900–2100 → `invalid`.
+- **Phones** — Israeli landline/mobile format → `uncertain`.
+- **Postal code** — up to 7 digits → `uncertain`.
+- **Gender** — must be `זכר` / `נקבה` → `uncertain`.
+- **Time of injury** — must parse to a valid `HH:MM` (00–23 / 00–59) → `uncertain`.
+
+**Cross-field & logical checks**
+- **Date ordering** — date of birth before date of injury; injury on/before form filling date → `uncertain`.
+- **Form receipt date at clinic** — cannot be before the injury date or before the form filling date → `uncertain`.
+- **Future dates** — no form date may be later than today → `uncertain`.
+- **Required identity fields** — ID number, last name, first name flagged when empty → `uncertain`.
+
+**OCR-confidence signal** — fields whose source words scored below 0.70 confidence (and
+weren't vision-verified) are flagged `uncertain`. These signals feed an overall
+`high` / `medium` / `low` accuracy estimate (critical-field or multi-field errors → `low`).
+
 Offline accuracy harness against labelled samples:
 
 ```powershell

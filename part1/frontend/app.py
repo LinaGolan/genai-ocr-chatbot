@@ -144,6 +144,7 @@ def _field_html(label: str, value: str, field_key: str, statuses: dict[str, Fiel
     )
 
     badge_html = ""
+    reason_html = ""
     if status != "ok":
         badge_bg   = _STATUS_BADGE.get(status, "#607d8b")
         badge_text = _STATUS_LABEL.get(status, status.upper())
@@ -152,6 +153,12 @@ def _field_html(label: str, value: str, field_key: str, statuses: dict[str, Fiel
             f'font-size:0.62rem;font-weight:700;padding:2px 8px;border-radius:10px;'
             f'letter-spacing:0.5px;white-space:nowrap">{badge_text}</span>'
         )
+        # (a) Surface the issue inline — visible without hovering the tooltip.
+        if status_obj.reason:
+            reason_html = (
+                f'<div style="font-size:0.7rem;color:{badge_bg};margin-top:3px;'
+                f'font-style:italic;word-break:break-word">⚠ {status_obj.reason}</div>'
+            )
 
     return (
         f'<div style="display:flex;align-items:center;background:{bg};'
@@ -161,6 +168,7 @@ def _field_html(label: str, value: str, field_key: str, statuses: dict[str, Fiel
         f'<div style="font-size:0.67rem;color:#78909c;text-transform:uppercase;'
         f'letter-spacing:0.6px;font-weight:600;margin-bottom:2px">{label}</div>'
         f'{val_html}'
+        f'{reason_html}'
         f'</div>'
         f'{badge_html}'
         f'</div>'
@@ -261,6 +269,9 @@ _DETERMINISTIC_PREFIXES = (
     "id must be", "invalid day", "invalid month", "implausible year",
     "unexpected israeli phone", "postal code should", "unexpected gender",
     "date of birth is not", "date of injury is after", "non-numeric date",
+    "date is in the future", "form receipt date at clinic is before",
+    "unexpected time-of-injury", "id number is empty", "last name is empty",
+    "first name is empty",
 )
 
 
