@@ -73,27 +73,28 @@ fast with a clear error if any are missing.
 streamlit run part1/frontend/app.py
 ```
 
-Upload a PDF/JPG of a BL283 form. The UI shows the raw OCR (left) and the
-extracted JSON with per-field validation highlights (right). Hebrew and English
-forms are both supported; missing fields are returned as empty strings.
+Upload a PDF/JPG of a BL283 form. The UI presents the extracted JSON with per-field validation highlights on the left and the raw extracted JSON on the right. The raw OCR output is available in a collapsed section at the bottom for debugging and inspection. Hebrew and English forms are supported, and missing fields are returned as empty strings.
 
 ### How it works (upload → JSON)
 
 ```
-   PDF / JPG upload
-        │
-   ① file check ─────────── code            (type, size, page-count limits)
-        │
-   ② OCR ────────────────── Document Intelligence (Layout API)
-        │                                    → Markdown + per-word confidence
-   ③ extract fields ─────── GPT-4o           (OCR Markdown → JSON, Structured
-        │                                      Outputs, temperature 0)
-   ④ vision re-read ─────── GPT-4o (vision)  (only fields with low OCR
-        │                                      confidence or that fail a check —
-        │                                      re-read straight from the image)
-   ⑤ validate ───────────── code            (format + cross-field + confidence)
-        │
-   ⑥ show result ────────── Streamlit        (raw OCR + JSON + ERROR/CHECK badges)
+    PDF / JPG upload
+         │
+    ① file check ─────────── code
+         │
+    ② OCR ────────────────── Document Intelligence
+         │                   → Markdown + per-word confidence
+    ③ extract fields ─────── GPT-4o (OCR Markdown → JSON)
+         │
+    ④a confidence check ──── code           ← find_low_confidence_fields()
+    ④b det. pre-check ─────── code           ← failing_fields() (deterministic only)
+         │                   combine: low-conf ∪ det-failures ∪ empty criticals ∪ always-verify
+         │
+    ④c vision re-read ─────── GPT-4o vision  (only trigger fields, cropped or full-page)
+         │
+    ④d validate ──────────── code           (deterministic + confidence; trusted fields
+         │                                   skip the low-conf signal but still face det. checks)
+    ⑤ show result ────────── Streamlit
 ```
 
 Each value is always kept and shown as-is; problems are surfaced as badges, never
@@ -123,8 +124,7 @@ the vision corrector (GPT-4o re-reads them from the image); the remaining checks
 - **Required identity fields** — ID number, last name, first name flagged when empty → `uncertain`.
 
 **OCR-confidence signal** — fields whose source words scored below 0.70 confidence (and
-weren't vision-verified) are flagged `uncertain`. These signals feed an overall
-`high` / `medium` / `low` accuracy estimate (critical-field or multi-field errors → `low`).
+weren't vision-verified) are flagged `uncertain`.
 
 Offline accuracy harness against 6 labelled samples (3 Hebrew + 3 English):
 
