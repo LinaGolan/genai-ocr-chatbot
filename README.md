@@ -1,4 +1,4 @@
-# KPMG GenAI Developer Assessment
+# AI-Powered Document Processing & Medical Services Chatbot
 
 Two independent systems that share one Azure resource layer, built with the
 **native Azure OpenAI SDK only** (no LangChain or other LLM frameworks).
