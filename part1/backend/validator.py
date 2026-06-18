@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 """
-Three-signal validation for BL283 extracted fields.
+Two-signal validation for BL283 extracted fields.
 
 Priority order (a higher-priority 'invalid' cannot be downgraded):
-  1. Deterministic checks  — ID checksum, date ranges, phone format, postal, cross-field
+  1. Deterministic checks  — ID 9-digit length, date ranges, phone format, postal, cross-field
   2. OCR confidence        — per-word confidence from Document Intelligence
-  3. LLM self-review       — GPT-4o semantic plausibility (supplementary only)
+
+Low-confidence fields are repaired upstream by vision_corrector (GPT-4o re-reads
+them from the source image) before validation runs; fields it verified are passed
+in via `trusted_fields` so this module does not re-flag them as low-confidence.
 
 All data models live in schema.py; this module is validation logic only.
 """
 
-import json
 import re
 from typing import Any, Literal
 
-from shared.azure_client import openai_client, GPT4O_DEPLOYMENT
 from shared.logger import get_logger, hash_id
-from part1.backend.prompts import SELF_REVIEW_SYSTEM_PROMPT, SELF_REVIEW_USER_PROMPT_TEMPLATE
 from part1.backend.schema import FieldStatus, ValidationResult
 
 logger = get_logger(__name__)
@@ -30,36 +30,28 @@ logger = get_logger(__name__)
 def validate(
     extracted: dict[str, Any],
     ocr_result=None,   # OCRResult | None
-    ocr_markdown: str = "",
+    trusted_fields: set[str] | None = None,
 ) -> ValidationResult:
     """
-    Run all three validation signals; return a merged ValidationResult.
+    Run both validation signals; return a merged ValidationResult.
 
     Parameters
     ----------
-    extracted:    dict output from extractor.extract_fields()
-    ocr_result:   OCRResult from ocr_client.analyze_document() (or None)
-    ocr_markdown: raw OCR text (used by LLM self-review)
+    extracted:      dict output from extractor.extract_fields()
+    ocr_result:     OCRResult from ocr_client.analyze_document() (or None)
+    trusted_fields: dotted paths the vision corrector re-read from the source
+                    image; these are not flagged as low-OCR-confidence (the value
+                    no longer comes from the low-confidence OCR read).
     """
     statuses: dict[str, FieldStatus] = {}
+    trusted = trusted_fields or set()
 
     # 1. Deterministic (primary — cannot be overridden)
     _run_deterministic(extracted, statuses)
 
     # 2. OCR confidence (supporting)
     if ocr_result is not None:
-        _run_ocr_confidence(extracted, ocr_result, statuses)
-
-    # 3. LLM self-review (supplementary — cannot downgrade 'invalid')
-    if ocr_markdown:
-        word_conf: dict[str, float] = (
-            {w.lower().strip(".,;:\"'()"): c for w, c in ocr_result.word_confidences}
-            if ocr_result else {}
-        )
-        try:
-            _run_llm_review(extracted, ocr_markdown, statuses, word_conf)
-        except Exception as exc:
-            logger.warning("LLM self-review skipped", extra={"error": str(exc)[:200]})
+        _run_ocr_confidence(extracted, ocr_result, statuses, trusted)
 
     completeness = _compute_completeness(extracted)
     accuracy_estimate = _compute_accuracy_estimate(statuses, ocr_result)
@@ -78,6 +70,24 @@ def validate(
         completeness=completeness,
         accuracy_estimate=accuracy_estimate,
     )
+
+
+def deterministic_statuses(extracted: dict[str, Any]) -> dict[str, FieldStatus]:
+    """Run ONLY the deterministic checks (no OCR / image signals) and return the
+    per-field statuses. Used by the vision corrector to decide which fields fail
+    validation and therefore need re-reading from the source image."""
+    statuses: dict[str, FieldStatus] = {}
+    _run_deterministic(extracted, statuses)
+    return statuses
+
+
+def failing_fields(extracted: dict[str, Any]) -> set[str]:
+    """Dotted paths whose value does not pass deterministic validation
+    (status 'invalid' or 'uncertain')."""
+    return {
+        field for field, status in deterministic_statuses(extracted).items()
+        if status.status in ("invalid", "uncertain")
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -231,29 +241,46 @@ def _check_gender(extracted: dict, statuses: dict) -> None:
 _OCR_LOW_THRESHOLD = 0.70
 
 
-def _run_ocr_confidence(extracted: dict, ocr_result, statuses: dict) -> None:
+def _run_ocr_confidence(
+    extracted: dict, ocr_result, statuses: dict, trusted: set[str]
+) -> None:
     avg_conf: float = ocr_result.avg_confidence
 
     if avg_conf < _OCR_LOW_THRESHOLD:
         logger.warning("Low overall OCR confidence", extra={"avg_confidence": avg_conf})
-        _flag_low_ocr_string_fields(extracted, statuses, avg_conf)
+        _flag_low_ocr_string_fields(extracted, statuses, avg_conf, trusted)
 
     # Per-value word lookup: flag fields whose extracted words have low confidence
     word_conf: dict[str, float] = {
         w.lower().strip(".,;:\"'()") : c
         for w, c in ocr_result.word_confidences
     }
-    _check_field_word_confidence("lastName", extracted.get("lastName", ""), word_conf, statuses)
-    _check_field_word_confidence("firstName", extracted.get("firstName", ""), word_conf, statuses)
-    _check_field_word_confidence("idNumber", extracted.get("idNumber", ""), word_conf, statuses)
-    _check_field_word_confidence("jobType", extracted.get("jobType", ""), word_conf, statuses)
     addr = extracted.get("address") or {}
-    _check_field_word_confidence("address.city", addr.get("city", ""), word_conf, statuses)
-    _check_field_word_confidence("address.street", addr.get("street", ""), word_conf, statuses)
+    per_word = {
+        "lastName": extracted.get("lastName", ""),
+        "firstName": extracted.get("firstName", ""),
+        "idNumber": extracted.get("idNumber", ""),
+        "jobType": extracted.get("jobType", ""),
+        "address.city": addr.get("city", ""),
+        "address.street": addr.get("street", ""),
+    }
+    for field_name, value in per_word.items():
+        if field_name in trusted:
+            continue
+        _check_field_word_confidence(field_name, value, word_conf, statuses)
+
+    # Fields the vision corrector verified from the source image are no longer a
+    # low-confidence OCR read. Record that provenance only where deterministic
+    # validation has no verdict of its own — a deterministic 'invalid' OR
+    # 'uncertain' on the re-read value must stay visible (the value still fails
+    # validation even though it came from the image).
+    for field_name in trusted:
+        if field_name not in statuses:
+            statuses[field_name] = FieldStatus("ok", "Verified from form image")
 
 
 def _flag_low_ocr_string_fields(
-    extracted: dict, statuses: dict, avg_conf: float
+    extracted: dict, statuses: dict, avg_conf: float, trusted: set[str]
 ) -> None:
     affected = [
         "lastName", "firstName", "idNumber", "gender", "jobType",
@@ -262,6 +289,8 @@ def _flag_low_ocr_string_fields(
     ]
     reason = f"Low overall OCR confidence ({avg_conf:.2f})"
     for f in affected:
+        if f in trusted:
+            continue
         if extracted.get(f) and statuses.get(f, FieldStatus()).status != "invalid":
             statuses.setdefault(f, FieldStatus("uncertain", reason))
 
@@ -280,84 +309,6 @@ def _check_field_word_confidence(
             field_name,
             FieldStatus("uncertain", f"Low OCR confidence for: {', '.join(low_words[:3])}"),
         )
-
-
-# ---------------------------------------------------------------------------
-# Signal 3 — LLM self-review (GPT-4o)
-# ---------------------------------------------------------------------------
-
-_OCR_REVIEW_CHAR_LIMIT = 4_000  # cap to avoid token overflow
-_HIGH_CONF_THRESHOLD   = 0.85   # minimum per-word confidence to trust the OCR value
-
-
-def _resolve_field_value(extracted: dict, fname: str) -> str:
-    """Resolve a dotted field key to its string value from the extracted dict."""
-    val: Any = extracted
-    for part in fname.split("."):
-        val = val.get(part, "") if isinstance(val, dict) else ""
-    if isinstance(val, dict):
-        return "/".join(filter(None, [val.get("day"), val.get("month"), val.get("year")]))
-    return str(val) if val else ""
-
-
-def _ocr_confirms_value(value: str, word_conf: dict[str, float], ocr_markdown: str) -> bool:
-    """Return True when every token of *value* appears in the OCR with high confidence
-    AND the value itself is present verbatim in the OCR text.
-
-    Used to discard LLM self-review false-positives where the extracted value is
-    demonstrably supported by high-confidence OCR evidence.
-    """
-    if not value or value not in ocr_markdown:
-        return False
-    tokens = value.split()
-    return all(
-        word_conf.get(t.lower().strip(".,;:\"'()"), 0.0) >= _HIGH_CONF_THRESHOLD
-        for t in tokens
-    )
-
-
-def _run_llm_review(extracted: dict, ocr_markdown: str, statuses: dict, word_conf: dict[str, float] | None = None) -> None:
-    prompt = SELF_REVIEW_USER_PROMPT_TEMPLATE.format(
-        ocr_text=ocr_markdown[:_OCR_REVIEW_CHAR_LIMIT],
-        extracted_json=json.dumps(extracted, ensure_ascii=False, indent=2),
-    )
-    response = openai_client.chat.completions.create(
-        model=GPT4O_DEPLOYMENT,
-        messages=[
-            {"role": "system", "content": SELF_REVIEW_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
-    review = json.loads(response.choices[0].message.content)
-
-    flagged = []
-    discarded = []
-    for item in review.get("uncertain_fields", []):
-        fname = item.get("field", "").strip()
-        reason = item.get("reason", "Flagged by LLM self-review")
-        ocr_quote = item.get("ocr_quote", "").strip()
-        if not fname:
-            continue
-        # Discard flags where the claimed OCR evidence doesn't actually appear in the text
-        if ocr_quote and ocr_quote not in ocr_markdown:
-            discarded.append(fname)
-            continue
-        # Discard false positives: extracted value is verbatim in OCR with high confidence
-        if word_conf and _ocr_confirms_value(_resolve_field_value(extracted, fname), word_conf, ocr_markdown):
-            discarded.append(fname)
-            continue
-        # Cannot downgrade a deterministic 'invalid'
-        current = statuses.get(fname, FieldStatus())
-        if current.status != "invalid":
-            statuses[fname] = FieldStatus("uncertain", reason)
-        flagged.append(fname)
-
-    logger.info(
-        "LLM self-review complete",
-        extra={"flagged_fields": flagged, "discarded_hallucinations": discarded},
-    )
 
 
 # ---------------------------------------------------------------------------

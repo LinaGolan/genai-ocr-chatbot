@@ -577,46 +577,67 @@ Key parsing notes:
 
 
 # ---------------------------------------------------------------------------
-# Self-review prompts (GPT-4o)
+# Vision correction prompts (GPT-4o, multimodal)
+#
+# When OCR read certain fields with low confidence, the OCR text is itself
+# unreliable. This stage sends the SOURCE IMAGE back to GPT-4o and asks it to
+# re-read only those fields, then writes verified values back into the JSON.
 # ---------------------------------------------------------------------------
 
-SELF_REVIEW_SYSTEM_PROMPT = """You are a data-quality reviewer for Israeli National Insurance \
-form extractions (BL283).
+VISION_CORRECTION_SYSTEM_PROMPT = """You re-read specific fields from an image of an Israeli \
+National Insurance form (ביטוח לאומי, form BL283).
 
-You receive:
-  - The raw OCR text of the form.
-  - The JSON extracted from it.
-
-Your job: identify fields where the extracted value clearly contradicts what the OCR text shows.
+You are given the form image and a list of fields that were read with low OCR confidence or did
+not pass validation. For each field you also see the value a previous step guessed. Look at the
+form image and report the correct value for each listed field, reading it directly from the form.
 
 STRICT RULES:
-1. Only flag a field if you can copy a short, exact substring from the OCR text that contradicts
-   the extracted value. Put that substring in "ocr_quote". If you cannot find the exact quote,
-   do NOT flag the field.
-2. Never invent, guess, or paraphrase OCR content — only quote verbatim.
-3. Do NOT flag fields that are legitimately empty because the form is blank there.
-4. Do NOT flag minor normalisation differences (stripped dashes/spaces in phones, etc.).
-5. Do NOT flag a field just because the same area of the form also contains other text
-   that belongs to a different field (e.g. accidentAddress text near accidentLocation).
+1. Report ONLY the fields you are asked about — do not add any other field.
+2. Return each value exactly as written on the form, in the form's own language (Hebrew or English).
+   Do not translate or "tidy up" free-text values. (Structured fields follow rules 4–6 below.)
+3. If a field is blank on the form, or you cannot read it clearly, return an empty string "".
+   NEVER guess, infer, or invent a value.
+4. idNumber: return exactly 9 digits, no spaces or separators. If you cannot read all 9 clearly,
+   return "".
+5. Date fields (dateOfBirth, dateOfInjury, formFillingDate, formReceiptDateAtClinic): return the
+   date as DD/MM/YYYY using digits only. If you cannot read the full date, return "".
+6. Phone fields (mobilePhone, landlinePhone): return digits only, including the leading 0
+   (e.g. 0501234567).
+7. The previous guess may be wrong — trust the image, not the guess. If the image clearly shows the
+   same value, return that same value.
 
-Return a JSON object with exactly this structure:
-{
-  "uncertain_fields": [
-    { "field": "<fieldName>", "reason": "<short explanation>", "ocr_quote": "<exact OCR substring>" }
-  ]
+Return ONLY a JSON object whose keys are exactly the requested field names and whose values are
+strings. No commentary."""
+
+VISION_CORRECTION_USER_PROMPT_TEMPLATE = """\
+The fields below were read with low OCR confidence. Re-read each one from the attached form image \
+and return the correct value (or "" if it is blank / not legible).
+
+Fields to check (field — what it is — previous low-confidence reading):
+{fields_block}
+
+Return a JSON object with exactly these keys: {keys_list}"""
+
+# Human-readable labels for the fields the vision corrector may be asked to re-read.
+# Keys are the dotted field paths used throughout part1; values describe the field to the model.
+VISION_FIELD_LABELS: dict[str, str] = {
+    "lastName": "שם משפחה / last name",
+    "firstName": "שם פרטי / first name",
+    "idNumber": "מספר זהות / 9-digit ID number",
+    "gender": "מין / gender (זכר or נקבה)",
+    "dateOfBirth": "תאריך לידה / date of birth (DD/MM/YYYY)",
+    "address.city": "עיר / city",
+    "address.street": "רחוב / street",
+    "address.postalCode": "מיקוד / postal code",
+    "landlinePhone": "טלפון קווי / landline phone",
+    "mobilePhone": "טלפון נייד / mobile phone",
+    "jobType": "סוג העבודה / job type",
+    "dateOfInjury": "תאריך הפגיעה / date of injury (DD/MM/YYYY)",
+    "timeOfInjury": "שעת הפגיעה / time of injury",
+    "accidentLocation": "מקום התאונה / accident location",
+    "accidentAddress": "כתובת מקום התאונה / accident address",
+    "accidentDescription": "תיאור התאונה / accident description",
+    "injuredBodyPart": "האיבר שנפגע / injured body part",
+    "formFillingDate": "תאריך מילוי הטופס / form filling date (DD/MM/YYYY)",
+    "formReceiptDateAtClinic": "תאריך קבלת הטופס בקופה / form receipt date (DD/MM/YYYY)",
 }
-
-If everything looks correct, return: {"uncertain_fields": []}"""""
-
-SELF_REVIEW_USER_PROMPT_TEMPLATE = """\
-OCR text (may be truncated):
-<ocr_text>
-{ocr_text}
-</ocr_text>
-
-Extracted JSON:
-<extracted_json>
-{extracted_json}
-</extracted_json>
-
-List any fields whose extracted value is suspicious or inconsistent with the OCR text."""

@@ -54,7 +54,7 @@ def _evaluate_one(pdf_path: Path, gt_path: Path) -> dict:
     """
     from part1.backend.ocr_client import analyze_document
     from part1.backend.extractor import extract_fields
-    from part1.backend.validator import validate
+    from part1.backend.vision_corrector import correct_and_validate
 
     with open(pdf_path, "rb") as f:
         file_bytes = f.read()
@@ -65,7 +65,7 @@ def _evaluate_one(pdf_path: Path, gt_path: Path) -> dict:
     t0 = time.perf_counter()
     ocr = analyze_document(file_bytes, pdf_path.name)
     extracted = extract_fields(ocr.markdown)
-    val = validate(extracted, ocr_result=ocr, ocr_markdown=ocr.markdown)
+    extracted, val = correct_and_validate(extracted, ocr, file_bytes, pdf_path.name)
     elapsed = time.perf_counter() - t0
 
     pred_flat = _flatten(extracted)

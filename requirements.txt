@@ -15,5 +15,8 @@ streamlit
 numpy
 pydantic
 
+# Part 1 — rasterise PDF page 1 to an image for GPT-4o vision correction
+pymupdf
+
 # Utilities
 python-dotenv

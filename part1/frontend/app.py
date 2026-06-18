@@ -14,7 +14,7 @@ import streamlit as st
 
 from part1.backend.ocr_client import analyze_document, OCRResult
 from part1.backend.extractor import extract_fields
-from part1.backend.validator import validate
+from part1.backend.vision_corrector import correct_and_validate
 from part1.backend.schema import ValidationResult, FieldStatus
 
 # ---------------------------------------------------------------------------
@@ -267,11 +267,14 @@ _DETERMINISTIC_PREFIXES = (
 def _validation_source(reason: str) -> tuple[str, str]:
     """Return (icon, label) describing which signal produced the reason."""
     r = reason.lower()
-    if "ocr confidence" in r:
-        return "📡", "OCR confidence signal"
+    # Deterministic verdict wins, even when a vision re-read note is appended.
     if any(r.startswith(p) for p in _DETERMINISTIC_PREFIXES):
         return "🔢", "Deterministic check"
-    return "🤖", "LLM self-review"
+    if "ocr confidence" in r:
+        return "📡", "OCR confidence signal"
+    if "form image" in r:
+        return "🖼️", "Vision re-read from image"
+    return "✅", "Passed checks"
 
 
 def _proof_card_html(
@@ -425,7 +428,9 @@ def _render_validation_details(
 def _run_pipeline(file_bytes: bytes, filename: str) -> tuple[OCRResult, dict, dict]:
     ocr       = analyze_document(file_bytes, filename)
     extracted = extract_fields(ocr.markdown)
-    val       = validate(extracted, ocr_result=ocr, ocr_markdown=ocr.markdown)
+    # Re-read low-confidence / validation-failing fields from the source image
+    # (GPT-4o vision), then validate the corrected record.
+    extracted, val = correct_and_validate(extracted, ocr, file_bytes, filename)
     return ocr, extracted, val.to_dict()
 
 
