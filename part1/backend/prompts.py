@@ -41,10 +41,12 @@ matches the schema below exactly.
    - Hebrew label "טלפון נייד" / "נייד" → mobilePhone
    - Hebrew label "טלפון בית" / "טל' קווי" / "קווי" / "טלפון קווי" → landlinePhone
    - A lone letter or symbol (e.g. "C") near a phone label is a form artefact — ignore it.
-7. Signature: output "קיימת" ONLY when there is a clear handwritten signature or name
-   written in the חתימה area. If that area is blank, shows only the printed "חתימה" label,
-   or has just a stray mark / form line, output "". When unsure, output "" — do NOT assume
-   a signature exists.
+7. Signature: output "קיימת" ONLY when there is a clear handwritten signature (an ink
+   mark, initials, or cursive writing) physically inside the חתימה box.
+   The adjacent "שם המבקש" (name of applicant) field is SEPARATE — a name appearing
+   there does NOT count as a signature. X mark is also not a signature. If the חתימה box is blank, shows only the printed
+   "חתימה" label, or has just a stray mark / form line, output "".
+   When unsure, output "" — do NOT assume a signature exists.
 8. Output ONLY the JSON object. No explanation, no markdown fences, no extra text.
 9. ID number (מספר זהות): preserve the exact digit string from the OCR, including any
    leading zeros. Israeli ID numbers are always 9 digits — if OCR shows 8 digits, pad
@@ -220,7 +222,7 @@ Key parsing notes:
 - Gender: ☒ next to "זכר" → gender="זכר"
 - accidentLocation: ☒ next to "במפעל" → accidentLocation="במפעל"
 - healthFundMember: ☒ next to "מאוחדת" → healthFundMember="מאוחדת\"""",
-        '{"lastName":"טננהוים","firstName":"יהודה","idNumber":"877524563","gender":"זכר","dateOfBirth":{"day":"02","month":"02","year":"1995"},"address":{"street":"הרמבם","houseNumber":"16","entrance":"1","apartment":"12","city":"אבן יהודה","postalCode":"312422","poBox":""},"landlinePhone":"","mobilePhone":"0502474947","jobType":"מלצרות","dateOfInjury":{"day":"16","month":"04","year":"2022"},"timeOfInjury":"19:00","accidentLocation":"במפעל","accidentAddress":"הורדים 8, תל אביב","accidentDescription":"החלקתי בגלל שהרצפה הייתה רטובה ולא היה שום שלט שמזהיר.","injuredBodyPart":"יד שמאל","signature":"קיימת","formFillingDate":{"day":"25","month":"01","year":"2023"},"formReceiptDateAtClinic":{"day":"02","month":"02","year":"1999"},"medicalInstitutionFields":{"healthFundMember":"מאוחדת","natureOfAccident":"","medicalDiagnoses":""}}',
+        '{"lastName":"טננהוים","firstName":"יהודה","idNumber":"877524563","gender":"זכר","dateOfBirth":{"day":"02","month":"02","year":"1995"},"address":{"street":"הרמבם","houseNumber":"16","entrance":"1","apartment":"12","city":"אבן יהודה","postalCode":"312422","poBox":""},"landlinePhone":"","mobilePhone":"0502474947","jobType":"מלצרות","dateOfInjury":{"day":"16","month":"04","year":"2022"},"timeOfInjury":"19:00","accidentLocation":"במפעל","accidentAddress":"הורדים 8, תל אביב","accidentDescription":"החלקתי בגלל שהרצפה הייתה רטובה ולא היה שום שלט שמזהיר.","injuredBodyPart":"יד שמאל","signature":"","formFillingDate":{"day":"25","month":"01","year":"2023"},"formReceiptDateAtClinic":{"day":"02","month":"02","year":"1999"},"medicalInstitutionFields":{"healthFundMember":"מאוחדת","natureOfAccident":"","medicalDiagnoses":""}}',
     ),
     # ── Example B: leading-zero ID, blank entrance, both phones ──
     (
@@ -302,9 +304,8 @@ Key parsing notes:
 - jobType from "כאשר עבדתי ב מאפיית האחים" → jobType="מאפיית האחים"
 - Gender: ☒ next to "זכר" → gender="זכר"
 - accidentLocation: ☒ next to "במפעל" → accidentLocation="במפעל"
-- "חתימהX" — handwritten "X" confirms signature → signature="קיימת"
 - healthFundMember: ☒ next to "מאוחדת" → healthFundMember="מאוחדת\"""",
-        '{"lastName":"הלוי","firstName":"שלמה","idNumber":"022456120","gender":"זכר","dateOfBirth":{"day":"14","month":"10","year":"1990"},"address":{"street":"חיים ויצמן","houseNumber":"34","entrance":"","apartment":"6","city":"יוקנעם","postalCode":"4454124","poBox":""},"landlinePhone":"097656054","mobilePhone":"6554412742","jobType":"מאפיית האחים","dateOfInjury":{"day":"12","month":"08","year":"2005"},"timeOfInjury":"12:00","accidentLocation":"במפעל","accidentAddress":"האופים 17 בני ברק","accidentDescription":"במהלך העבודה נשרף ממגש לוהט.","injuredBodyPart":"הפנים במיוחד הלחי הימנית","signature":"קיימת","formFillingDate":{"day":"14","month":"09","year":"2006"},"formReceiptDateAtClinic":{"day":"03","month":"07","year":"2001"},"medicalInstitutionFields":{"healthFundMember":"מאוחדת","natureOfAccident":"","medicalDiagnoses":""}}',
+        '{"lastName":"הלוי","firstName":"שלמה","idNumber":"022456120","gender":"זכר","dateOfBirth":{"day":"14","month":"10","year":"1990"},"address":{"street":"חיים ויצמן","houseNumber":"34","entrance":"","apartment":"6","city":"יוקנעם","postalCode":"4454124","poBox":""},"landlinePhone":"097656054","mobilePhone":"6554412742","jobType":"מאפיית האחים","dateOfInjury":{"day":"12","month":"08","year":"2005"},"timeOfInjury":"12:00","accidentLocation":"במפעל","accidentAddress":"האופים 17 בני ברק","accidentDescription":"במהלך העבודה נשרף ממגש לוהט.","injuredBodyPart":"הפנים במיוחד הלחי הימנית","signature":"","formFillingDate":{"day":"14","month":"09","year":"2006"},"formReceiptDateAtClinic":{"day":"03","month":"07","year":"2001"},"medicalInstitutionFields":{"healthFundMember":"מאוחדת","natureOfAccident":"","medicalDiagnoses":""}}',
     ),
     # ── Example C: merged ת.ז./ס"ב → 10-digit string, entrance + apartment both present ──
     (
@@ -619,9 +620,12 @@ STRICT RULES:
    (e.g. 0501234567).
 7. The previous guess may be wrong — trust the image, not the guess. If the image clearly shows the
    same value, return that same value.
-8. signature: return "קיימת" ONLY if a clear handwritten signature or name is present in the חתימה
-   area of the image. If that area is blank, shows only the printed label, or has just a stray mark,
-   return "". An empty string here is a real answer (no signature) — not "could not read".
+8. signature: return "קיימת" ONLY if there is a clear handwritten signature (an ink mark,
+   initials, or cursive writing) physically inside the חתימה box.
+   The form shows both a חתימה box and an adjacent שם המבקש (name of applicant) field —
+   text in the שם המבקש field does NOT count as a signature. If the חתימה box is blank,
+   shows only the printed label, or has just a stray mark or form line, return "".
+   An empty string is a real verdict (no signature) — not "could not read".
 9. medicalInstitutionFields.healthFundMember: read the "למילוי ע״י המוסד הרפואי" checkbox row in the
    image. Return the single HMO marked ☒ — one of מכבי, מאוחדת, לאומית, כללית. The row is RIGHT-TO-LEFT
    with the HMO names close together, so zoom in and match the filled box to its HMO by precise

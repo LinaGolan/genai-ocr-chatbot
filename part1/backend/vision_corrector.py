@@ -115,6 +115,16 @@ _DATE_FIELDS = frozenset(
 
 _TRUSTED_OUTCOMES = ("corrected", "confirmed")
 
+# Fields that should be present on any completed BL283 submission.  When the
+# LLM extractor leaves one of these empty (common on handwritten forms where the
+# OCR markdown layout differs from typed examples), we trigger a vision re-read
+# so GPT-4o can read the handwriting directly from the source image.
+_CRITICAL_FIELDS = frozenset({
+    "firstName", "lastName", "idNumber",
+    "dateOfBirth", "dateOfInjury",
+    "accidentLocation", "accidentDescription", "injuredBodyPart", "jobType",
+})
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -147,8 +157,11 @@ def correct_and_validate(
     # attaches the ☒ to the wrong HMO), so the OCR-text read is unreliable — always
     # re-read it from the image.
     always_verify = ["medicalInstitutionFields.healthFundMember"]
+    # Empty critical fields: handwritten forms often cause the LLM to miss values
+    # that are clearly visible in the image — re-read them from the source image.
+    empty_critical = find_empty_critical_fields(extracted)
     targets = list(dict.fromkeys(
-        [*low_conf, *sorted(failed), *claimed_signature, *always_verify]
+        [*low_conf, *sorted(failed), *claimed_signature, *always_verify, *empty_critical]
     ))  # de-dupe, keep order
 
     if not targets:
@@ -156,7 +169,11 @@ def correct_and_validate(
 
     logger.info(
         "Vision re-read triggered",
-        extra={"low_confidence": low_conf, "failed_validation": sorted(failed)},
+        extra={
+            "low_confidence": low_conf,
+            "failed_validation": sorted(failed),
+            "empty_critical": empty_critical,
+        },
     )
 
     corrected, corrections = _reread_fields(extracted, ocr_result, file_bytes, filename, targets)
@@ -195,6 +212,20 @@ def find_low_confidence_fields(
                 targets.append(path)
 
     return targets
+
+
+def find_empty_critical_fields(extracted: dict[str, Any]) -> list[str]:
+    """Return critical fields the extractor left empty.
+
+    Handwritten forms often cause the OCR→text pipeline to miss values that
+    are visible in the image; sending these to vision lets GPT-4o read the
+    handwriting directly instead of relying on the OCR markdown.
+    Only truly empty values are returned — a field with any content is skipped.
+    """
+    return [
+        path for path in sorted(_CRITICAL_FIELDS)
+        if not _current_display(extracted, path).strip()
+    ]
 
 
 def trusted_fields(corrections: dict[str, dict]) -> set[str]:
