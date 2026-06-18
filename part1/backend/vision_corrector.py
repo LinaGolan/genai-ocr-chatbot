@@ -79,13 +79,21 @@ _MAX_WORDS_PER_TOKEN = 3       # a token hitting more words than this is too amb
 # Selection / checkbox fields are NEVER cropped to their value's location: every
 # option's label is printed on the page, so locating by the (possibly wrong)
 # extracted value crops to that option and biases vision into confirming it
-# instead of seeing the whole option row and re-judging which box is ticked. These
-# always get the full page — which is the entire point of re-reading them.
+# instead of seeing the whole option row and re-judging which box is ticked.
 _NO_CROP_FIELDS = frozenset({
     "gender",
     "accidentLocation",
     "medicalInstitutionFields.healthFundMember",
 })
+
+# Template-based crops for fields whose position on the standard BL283 form is
+# fixed regardless of content. (x0, y0, x1, y1) as fractions of page dimensions.
+# Used instead of value-based location — gives focused resolution without
+# confirmation bias from cropping to the extracted (possibly wrong) value.
+_TEMPLATE_CROPS: dict[str, tuple[float, float, float, float]] = {
+    # Medical-institution / HMO checkbox row is always in the bottom ~28% of the form
+    "medicalInstitutionFields.healthFundMember": (0.0, 0.72, 1.0, 1.0),
+}
 
 # Fields whose extracted value is matched word-by-word against OCR confidences
 # (mirrors validator Signal 2's per-word checks).
@@ -251,7 +259,9 @@ def _gather_reviews(
     unlocated: list[str] = []
 
     for path in targets:
-        box = _locate_field_region(path, extracted, ocr_result, full_img.size)
+        box = _template_region(path, full_img.size)
+        if box is None:
+            box = _locate_field_region(path, extracted, ocr_result, full_img.size)
         if box is None:
             unlocated.append(path)
             continue
@@ -269,6 +279,19 @@ def _gather_reviews(
         extra={"cropped_fields": len(targets) - len(unlocated), "fullpage_fields": len(unlocated)},
     )
     return review
+
+
+def _template_region(
+    path: str, img_size: tuple[int, int]
+) -> tuple[int, int, int, int] | None:
+    """Return a fixed pixel crop box for fields with a known template position,
+    or None if no template region is defined for *path*."""
+    fracs = _TEMPLATE_CROPS.get(path)
+    if fracs is None:
+        return None
+    w, h = img_size
+    x0, y0, x1, y1 = fracs
+    return (int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
 
 
 def _locate_field_region(
@@ -415,11 +438,32 @@ def _annotate_unresolved(
 # Azure OpenAI call
 # ---------------------------------------------------------------------------
 
+# Fields where showing the previous OCR reading anchors vision into confirming
+# a wrong value instead of independently re-judging. For these we omit the
+# "previously" hint and ask vision to determine the answer from scratch.
+# Note: healthFundMember is NOT included here — it gets a template crop of just
+# the checkbox row, so vision can see the checkboxes clearly without anchoring.
+_NO_PREV_HINT_FIELDS = frozenset({
+    "gender",
+    "accidentLocation",
+})
+
+
+def _field_line(path: str, extracted: dict) -> str:
+    label = VISION_FIELD_LABELS.get(path, path)
+    if path in _NO_PREV_HINT_FIELDS:
+        return (
+            f"- {path} — {label} — "
+            "OCR reading is unreliable for this field; determine the answer "
+            "independently from the image (do NOT anchor on any prior reading)"
+        )
+    return f'- {path} — {label} — previously: "{_current_display(extracted, path)}"'
+
+
 def _call_vision(data_url: str, targets: list[str], extracted: dict) -> dict:
     """Single GPT-4o vision call; returns the parsed {field: value} JSON."""
     field_lines = "\n".join(
-        f'- {path} — {VISION_FIELD_LABELS.get(path, path)} — previously: "{_current_display(extracted, path)}"'
-        for path in targets
+        _field_line(path, extracted) for path in targets
     )
     user_text = VISION_CORRECTION_USER_PROMPT_TEMPLATE.format(
         fields_block=field_lines,
