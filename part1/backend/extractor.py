@@ -115,7 +115,9 @@ def extract_fields(ocr_markdown: str) -> dict[str, Any]:
     messages = _build_extraction_messages(ocr_markdown, language)
 
     t0 = time.perf_counter()
-    raw = _try_structured_outputs(messages) or _call_json_object(messages)
+    structured_result = _try_structured_outputs(messages)
+    raw = structured_result if structured_result is not None else _call_json_object(messages)
+    used_structured = structured_result is not None
     elapsed = time.perf_counter() - t0
 
     # Merge with defaults so all keys are present, then validate shape
@@ -133,7 +135,7 @@ def extract_fields(ocr_markdown: str) -> dict[str, Any]:
             "language": language,
             "empty_fields": empty_count,
             "latency_s": round(elapsed, 2),
-            "mode": "structured_outputs" if raw is not _SENTINEL else "json_object",
+            "mode": "structured_outputs" if used_structured else "json_object",
         },
     )
     return result
@@ -142,9 +144,6 @@ def extract_fields(ocr_markdown: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-_SENTINEL = object()  # used only for the logger mode label
-
 
 def _try_structured_outputs(messages: list[dict]) -> dict | None:
     """
@@ -193,7 +192,7 @@ def _try_structured_outputs(messages: list[dict]) -> dict | None:
 def _call_json_object(messages: list[dict]) -> dict:
     """Standard json_object fallback extraction."""
     response = openai_client.chat.completions.create(
-        model=GPT4O_DEPLOYMENT,
+        model=_EXTRACTION_DEPLOYMENT,
         messages=messages,
         temperature=0,
         seed=42,
@@ -233,44 +232,6 @@ def _patch_for_strict_mode(node: dict) -> None:
         _patch_for_strict_mode(sub)
     for item in node.get("allOf", []):
         _patch_for_strict_mode(item)
-
-
-_DATE_KEYS = ("dateOfBirth", "dateOfInjury", "formFillingDate", "formReceiptDateAtClinic")
-
-
-def _fix_date_fields(data: dict) -> None:
-    """Correct field misassignments for all date dicts."""
-    for key in _DATE_KEYS:
-        d = data.get(key)
-        if not isinstance(d, dict):
-            continue
-        _normalize_date(d)
-
-
-def _normalize_date(d: dict) -> None:
-    """
-    Fix two detectable reversal patterns:
-      1. year/day swap  — 'day' holds a 4-digit year (≥1900) and 'year' holds a day value (≤31)
-      2. month/day swap — 'month' holds an impossible month (>12) while 'day' is a valid month (≤12)
-    """
-    day_s = d.get("day", "")
-    month_s = d.get("month", "")
-    year_s = d.get("year", "")
-    try:
-        dv = int(day_s) if day_s else 0
-        mv = int(month_s) if month_s else 0
-        yv = int(year_s) if year_s else 0
-    except (ValueError, TypeError):
-        return
-
-    # Pattern 1: year value ended up in 'day', day value in 'year'
-    if dv >= 1900 and 1 <= yv <= 31:
-        d["day"], d["year"] = year_s, day_s
-        dv, yv = yv, dv  # keep locals in sync for pattern 2
-
-    # Pattern 2: day and month swapped (month > 12 is impossible)
-    if mv > 12 and 1 <= dv <= 12:
-        d["day"], d["month"] = month_s, day_s
 
 
 def _pad_id_number(data: dict) -> None:

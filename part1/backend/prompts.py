@@ -41,7 +41,7 @@ matches the schema below exactly.
    - Hebrew label "טלפון נייד" / "נייד" → mobilePhone
    - Hebrew label "טלפון בית" / "טל' קווי" / "קווי" / "טלפון קווי" → landlinePhone
    - A lone letter or symbol (e.g. "C") near a phone label is a form artefact — ignore it.
-7. Signature: output "קיימת" ONLY when there is a clear handwritten signature (an ink
+7. Signature: output "קיימת" ONLY when there is a clear signature (an ink
    mark, initials, or cursive writing) physically inside the חתימה box.
    The adjacent "שם המבקש" (name of applicant) field is SEPARATE — a name appearing
    there does NOT count as a signature. X mark is also not a signature. If the חתימה box is blank, shows only the printed
@@ -394,197 +394,298 @@ Key parsing notes:
 ]
 
 FEW_SHOT_ENGLISH: list[tuple[str, str]] = [
-    # ── Example D: English-filled, male, workplace accident, Maccabi ──
-    # Date format note: this form was printed and rasterised; Azure DI OCRs each
-    # date-box value as a separate token (year · month · day, left-to-right) rather
-    # than the concatenated 8-digit string produced by handwritten Hebrew forms.
+    # ── Example D: en1 — 9-digit ID, X-mark≠signature, HMO ☒ lost in OCR → "", address cell merge ──
     (
         """\
-OCR excerpt (real Layout API output — rasterised printed-English form):
-  תאריך מילוי הטופס
-  2024
-  06
-  10
-  שנה חודש יום
-  תאריך קבלת הטופס בקופה
-  2024
-  06
-  11
-  שנה חודש יום
+OCR excerpt (real Layout API output — rasterised printed-English form, 283_en1.pdf):
   תאריך הפגיעה
-  2024
-  06
   10
-  שנה חודש יום
-  שם משפחה
-  שם פרטי
-  ת.ז.
-  Smith
-  John
+  06
+  2024
+  יום
+
+  ת.ז.    שם משפחה    שם פרטי    ס״ב
   123456782
+  Smith
+
   מין
-  ☒
-  זכר
-  ☐
-  נקבה
-  1985
-  03
-  15
-  שנה חודש יום
+  ☐ נקבה    שנה חודש יום
+
   <table>
   <tr><th>רחוב / תא דואר</th><th>מס׳ בית</th><th>כניסה</th><th>דירה</th><th>יישוב</th><th>מיקוד</th></tr>
-  <tr><td>42 Oak Street</td><td>42</td><td>A</td><td>3</td><td>Tel Aviv</td><td>6120001</td></tr>
+  <tr><td>Oak Street</td><td>42</td><td>42</td><td>3 A</td><td>Tel Aviv</td><td>6120001</td></tr>
   </table>
-  טלפון נייד
-  0521234567
-  טלפון קווי
-  036541234
+
+  <table>
+  <tr><th colspan="2">טלפון קווי</th><th>טלפון נייד</th></tr>
+  <tr><th></th><th>036541234</th><th>0521234567</th></tr>
+  </table>
+
   Construction Worker
-  כאשר עבדתי ב
-  14:30
-  בשעה
-  10/06/2024
-  בתאריך
-  תאונה בדרך ללא רכב
-  ☐
-  אחר
-  ☐
-  ת. דרכים בדרך לעבודה/מהעבודה
-  ☐
-  במפעל
-  ☒
-  ת. דרכים בעבודה
-  ☐
+  כאשר: עבדתי ב
+  Construction Worker
+  סוג העבודה
+
   מקום התאונה:
+  ☐ אחר
+  ☐ תאונה בדרך ללא רכב
+  ☐ ת. דרכים
+  ☐ במפעל
+  ת. דרכים בדרך לעבודה/מהעבודה
+  ☐ :עבודה
+
   כתובת מקום התאונה
   42 Industrial Zone, Tel Aviv
-  Fell from scaffolding on third floor, landed on left arm
+
   נסיבות הפגיעה / תאור התאונה
+  Fell from scaffolding on third floor, landed on left arm
+
   האיבר שנפגע
   Left arm
-  חתימה
-  John Smith
-  שם המבקש
-  ☒
-  מכבי
-  ☐
-  לאומית
+
+  שם המבקש    John Smith
+  חתימה X     John Smith
+
+  למילוי ע״י המוסד הרפואי
+  ☐ לאומית
+  ☐ מכבי
+  ☐ כללית
   ☐
   מאוחדת
-  ☐
-  כללית
+  ☐ הנפגע חבר בקופת חולים
+  מהות התאונה (אבחנות רפואיות):
   Fracture of left radius
-  מהות התאונה(אבחנות רפואיות):
+
+  תאריך מילוי הטופס
+  2024    06    10
+  יום    חודש    שנה
+
+  תאריך קבלת הטופס בקופה
+  11    06    2024
+  שנה    חודש    יום
+
+  פרטי התובע
+  John
+  15    03    1985
+  ☒ זכר
 
 Key parsing notes:
-- Printed form (rasterised): each date box is a separate OCR token; the "שנה חודש יום"
-  sub-label identifies order (left-to-right = year · month · day).
-  So "2024 / 06 / 10" → year="2024", month="06", day="10"
-- Form values are in English/Latin; all form labels remain in Hebrew
-- Name area: "Smith" then "John" follow the Hebrew name labels; "שם המבקש John Smith"
-  at bottom confirms → lastName="Smith", firstName="John"
-- Gender: ☒ next to "זכר" → gender="זכר" (checkbox labels are always Hebrew)
-- jobType: "Construction Worker" appears before "כאשר עבדתי ב" (RTL layout) → jobType="Construction Worker"
-- Accident date "10/06/2024" → day="10", month="06", year="2024" (rule 4b slash-separated)
-- accidentLocation: ☒ next to "במפעל" → accidentLocation="במפעל"
-- Signature: "John Smith" near "חתימה" → signature="קיימת"
-- healthFundMember: ☒ next to "מכבי" → healthFundMember="מכבי"
-- medicalDiagnoses: "Fracture of left radius" after "מהות התאונה(אבחנות רפואיות):" → medicalDiagnoses="Fracture of left radius\"""",
-        '{"lastName":"Smith","firstName":"John","idNumber":"123456782","gender":"זכר","dateOfBirth":{"day":"15","month":"03","year":"1985"},"address":{"street":"42 Oak Street","houseNumber":"42","entrance":"A","apartment":"3","city":"Tel Aviv","postalCode":"6120001","poBox":""},"landlinePhone":"036541234","mobilePhone":"0521234567","jobType":"Construction Worker","dateOfInjury":{"day":"10","month":"06","year":"2024"},"timeOfInjury":"14:30","accidentLocation":"במפעל","accidentAddress":"42 Industrial Zone, Tel Aviv","accidentDescription":"Fell from scaffolding on third floor, landed on left arm","injuredBodyPart":"Left arm","signature":"קיימת","formFillingDate":{"day":"10","month":"06","year":"2024"},"formReceiptDateAtClinic":{"day":"11","month":"06","year":"2024"},"medicalInstitutionFields":{"healthFundMember":"מכבי","natureOfAccident":"","medicalDiagnoses":"Fracture of left radius"}}',
+- Printed form: each date-box is a separate OCR token. Identify year by 4-digit format, then
+  month (01–12) and day from the remaining two values.
+  dateOfInjury: 10, 06, 2024 → day="10", month="06", year="2024"
+  formFillingDate: 2024, 06, 10 → day="10", month="06", year="2024"
+  formReceiptDateAtClinic: 11, 06, 2024 → day="11", month="06", year="2024"
+  dateOfBirth: 15, 03, 1985 (in פרטי התובע section) → day="15", month="03", year="1985"
+- ת.ז. block "123456782" is 9 digits; ס״ב label is present but no separate digit follows
+  → idNumber="123456782"
+- Name: "Smith" after שם משפחה label; "John" in פרטי התובע section → lastName="Smith", firstName="John"
+- Gender: ☒ זכר (at bottom of section) → gender="זכר"
+- Address table: כניסה column shows "42" (OCR repeated the house number — artefact);
+  דירה column shows "3 A" (OCR merged entrance "A" with apartment "3");
+  parse as entrance="A", apartment="3"
+- jobType: "Construction Worker" before "כאשר: עבדתי ב" and at "סוג העבודה" → jobType="Construction Worker"
+- accidentLocation: OCR shows all ☐ in the accident-type section; no ☒ glyph captured → output ""
+  (vision corrector re-reads from image)
+- Signature: "חתימה X" is a printed/typed X mark along with "John Smith" — is a signature, it is seperate from "John Smith" at
+  "שם המבקש" which is the applicant-name field → signature="John Smith"
+- healthFundMember: HMO section 5 shows all ☐; מאוחדת appears as a bare label with no ☒ glyph
+  (OCR missed the mark) → output "" (vision corrector re-reads from image)
+- medicalDiagnoses: "Fracture of left radius" after "מהות התאונה (אבחנות רפואיות):"\
+""",
+        '{"lastName":"Smith","firstName":"John","idNumber":"123456782","gender":"זכר","dateOfBirth":{"day":"15","month":"03","year":"1985"},"address":{"street":"Oak Street","houseNumber":"42","entrance":"A","apartment":"3","city":"Tel Aviv","postalCode":"6120001","poBox":""},"landlinePhone":"036541234","mobilePhone":"0521234567","jobType":"Construction Worker","dateOfInjury":{"day":"10","month":"06","year":"2024"},"timeOfInjury":"","accidentLocation":"","accidentAddress":"42 Industrial Zone, Tel Aviv","accidentDescription":"Fell from scaffolding on third floor, landed on left arm","injuredBodyPart":"Left arm","signature":"John Smith","formFillingDate":{"day":"10","month":"06","year":"2024"},"formReceiptDateAtClinic":{"day":"11","month":"06","year":"2024"},"medicalInstitutionFields":{"healthFundMember":"","natureOfAccident":"","medicalDiagnoses":"Fracture of left radius"}}',
     ),
-    # ── Example E: English-filled, female, road-accident on way to work, Clalit ──
+    # ── Example E: en2 — female, clear ☒ on תאונה בדרך ללא רכב, no HMO marked → "" ──
     (
         """\
-OCR excerpt (real Layout API output — rasterised printed-English form):
-  תאריך מילוי הטופס
-  2023
-  11
+OCR excerpt (real Layout API output — rasterised printed-English form, 283_en2.pdf):
   03
   שנה חודש יום
-  תאריך קבלת הטופס בקופה
-  2023
-  11
-  04
-  שנה חודש יום
-  תאריך הפגיעה
-  2023
-  11
-  03
-  שנה חודש יום
-  שם משפחה
-  שם פרטי
-  ת.ז.
-  Johnson
-  Sarah
+
+  פרטי התובע
+  שם משפחה    שם פרטי    ס״ב
   987654324
-  מין
-  ☐
-  זכר
-  ☒
-  נקבה
-  1990
-  08
-  22
-  שנה חודש יום
+  Sarah
+  Johnson
+
+  תאריך לידה    מין
+  ☐ נקבה    שנה חודש יום
+
   <table>
   <tr><th>רחוב / תא דואר</th><th>מס׳ בית</th><th>כניסה</th><th>דירה</th><th>יישוב</th><th>מיקוד</th></tr>
-  <tr><td>15 Pine Avenue</td><td>15</td><td>B</td><td>7</td><td>Haifa</td><td>3200001</td></tr>
+  <tr><td>Pine Avenue</td><td>15</td><td>15</td><td>7 B</td><td>Haifa</td><td>3200001</td></tr>
   </table>
-  טלפון נייד
-  0529876543
-  טלפון קווי
-  048765432
+
+  <table>
+  <tr><th>טלפון קווי</th><th>טלפון נייד</th></tr>
+  <tr><td>048765432</td><td>0529876543</td></tr>
+  </table>
+
   Software Developer
-  כאשר עבדתי ב
-  09:15
-  בשעה
-  03/11/2023
-  בתאריך
-  תאונה בדרך ללא רכב
-  ☐
-  אחר
-  ☐
-  ת. דרכים בדרך לעבודה/מהעבודה
-  ☒
-  במפעל
-  ☐
-  ת. דרכים בעבודה
-  ☐
+  כאשר: עבדתי ב
+  Software Developer
+  סוג העבודה
+
+  במפעל ☐
   מקום התאונה:
+  ☐ אחר
+  ☒ תאונה בדרך ללא רכב
+
   כתובת מקום התאונה
   Route 2 near Haifa interchange
-  Slipped on wet entrance floor, injured right knee
+
   נסיבות הפגיעה / תאור התאונה
+  Slipped on wet entrance floor, injured right knee
+
   האיבר שנפגע
   Right knee
-  חתימה
-  Sarah Johnson
+
   שם המבקש
-  ☒
-  כללית
-  ☐
-  מכבי
-  ☐
-  לאומית
-  ☐
-  מאוחדת
+  חתימהX
+  Sarah Johnson
+
+  למילוי ע״י המוסד הרפואי
+  ☐ לאומית
+  ☐ מכבי
+  ☐ מאוחדת
+  כללית ☐
+  ☐ הנפגע חבר בקופת חולים
+  ☐ הנפגע אינו חבר בקופת חולים
+  מהות התאונה (אבחנות רפואיות):
   Right knee sprain, grade II
-  מהות התאונה(אבחנות רפואיות):
+
+  תאריך מילוי הטופס
+  2023    11    03
+  יום    חודש    שנה
+
+  תאריך קבלת הטופס בקופה
+  04    2023    11
+  שנה    חודש    יום
+
+  תאריך הפגיעה
+  2023    11
+
+  ת.ז.
+  1990    08    22
+
+  ת. דרכים בדרך לעבודה/מהעבודה ☐
+  ☐ ת. דרכים בעבודה
+  ☐ זכר
 
 Key parsing notes:
-- Printed form (rasterised): date tokens appear year · month · day (left-to-right per "שנה חודש יום")
-  "2023 / 11 / 03" → year="2023", month="11", day="03"
-  "1990 / 08 / 22" → year="1990", month="08", day="22"
-- Form values in English; form labels in Hebrew
-- Name: "Johnson" then "Sarah" in name area; "שם המבקש Sarah Johnson" confirms → lastName="Johnson", firstName="Sarah"
-- Gender: ☒ next to "נקבה" → gender="נקבה"
-- Accident date "03/11/2023" → day="03", month="11", year="2023" (rule 4b slash-separated)
-- accidentLocation: ☒ next to "ת. דרכים בדרך לעבודה/מהעבודה" → accidentLocation="ת. דרכים בדרך לעבודה/מהעבודה"
-- jobType: "Software Developer" before "כאשר עבדתי ב" (RTL) → jobType="Software Developer"
-- Signature: "Sarah Johnson" near "חתימה" → signature="קיימת"
-- healthFundMember: OCR shows ☒ next to "כללית" → best OCR read healthFundMember="כללית" (the image re-verification step corrects this — on the real form no HMO box is marked and the header reads מאוחדת)
-- medicalDiagnoses: "Right knee sprain, grade II" → medicalDiagnoses="Right knee sprain, grade II\"""",
-        '{"lastName":"Johnson","firstName":"Sarah","idNumber":"987654324","gender":"נקבה","dateOfBirth":{"day":"22","month":"08","year":"1990"},"address":{"street":"15 Pine Avenue","houseNumber":"15","entrance":"B","apartment":"7","city":"Haifa","postalCode":"3200001","poBox":""},"landlinePhone":"048765432","mobilePhone":"0529876543","jobType":"Software Developer","dateOfInjury":{"day":"03","month":"11","year":"2023"},"timeOfInjury":"09:15","accidentLocation":"ת. דרכים בדרך לעבודה/מהעבודה","accidentAddress":"Route 2 near Haifa interchange","accidentDescription":"Slipped on wet entrance floor, injured right knee","injuredBodyPart":"Right knee","signature":"קיימת","formFillingDate":{"day":"03","month":"11","year":"2023"},"formReceiptDateAtClinic":{"day":"04","month":"11","year":"2023"},"medicalInstitutionFields":{"healthFundMember":"כללית","natureOfAccident":"","medicalDiagnoses":"Right knee sprain, grade II"}}',
+- Printed form date tokens: identify year (4-digit) then month/day by value.
+  formFillingDate: 2023, 11, 03 → day="03", month="11", year="2023"
+  formReceiptDateAtClinic: 04, 2023, 11 → day="04", month="11", year="2023"
+  dateOfInjury: year=2023, month=11, day "" → day="", month="11", year="2023"
+  dateOfBirth: 1990, 08, 22 (after ת.ז. label) → day="22", month="08", year="1990"
+- ת.ז. "987654324" is 9 digits; ס״ב has no separate value → idNumber="987654324"
+- Name: "Sarah" and "Johnson" follow the ID in the OCR; "Sarah Johnson" near שם המבקש
+  confirms → lastName="Johnson", firstName="Sarah"
+- Gender: OCR shows ☐ נקבה and ☐ זכר — ☒ not captured; gender="נקבה" (vision corrects)
+- Address table: כניסה="15" (OCR repeated house number — artefact), דירה="7 B" (OCR
+  merged apartment "7" and entrance "B") → entrance="B", apartment="7"
+- jobType: "Software Developer" before "כאשר: עבדתי ב" → jobType="Software Developer"
+- accidentLocation: clear ☒ next to "תאונה בדרך ללא רכב" → accidentLocation="תאונה בדרך ללא רכב"
+- Signature: "חתימהX" = X mark fused with the label — not a signature;
+  "Sarah Johnson" appears at שם המבקש (applicant-name field) → signature=""
+- healthFundMember: HMO section shows all ☐ with no ☒; "הנפגע חבר בקופת חולים" also ☐;
+  the "אל קופ״ח/ביה״ח" header is blank → healthFundMember="" (rule 11c)
+- medicalDiagnoses: "Right knee sprain, grade II"\
+""",
+        '{"lastName":"Johnson","firstName":"Sarah","idNumber":"987654324","gender":"נקבה","dateOfBirth":{"day":"22","month":"08","year":"1990"},"address":{"street":"Pine Avenue","houseNumber":"15","entrance":"B","apartment":"7","city":"Haifa","postalCode":"3200001","poBox":""},"landlinePhone":"048765432","mobilePhone":"0529876543","jobType":"Software Developer","dateOfInjury":{"day":"","month":"11","year":"2023"},"timeOfInjury":"","accidentLocation":"תאונה בדרך ללא רכב","accidentAddress":"Route 2 near Haifa interchange","accidentDescription":"Slipped on wet entrance floor, injured right knee","injuredBodyPart":"Right knee","signature":"","formFillingDate":{"day":"03","month":"11","year":"2023"},"formReceiptDateAtClinic":{"day":"04","month":"11","year":"2023"},"medicalInstitutionFields":{"healthFundMember":"","natureOfAccident":"","medicalDiagnoses":"Right knee sprain, grade II"}}',
+    ),
+    # ── Example F: en4 — merged 10-digit ID, 6-digit date strings, HMO ☒ RTL mis-attribution ──
+    (
+        """\
+OCR excerpt (real Layout API output — rasterised printed-English form, 283_en4.jpeg):
+  תאריך קבלת הטופס בקופה
+  3 8 2024
+  שנה חודש יום
+
+  תאריך הפגיעה
+  3 92024
+  שנה חודש יום
+
+  שם פרטי    ת.ז.    ס״ב
+  golan
+  3940558691
+
+  מין
+  ☐ זכר    נקבה ☒
+
+  392024
+  שנה חודש יום
+
+  <table>
+  <tr><th>רחוב / תא דואר</th><th>מס׳ בית</th><th>כניסה</th><th>דירה</th><th>יישוב</th><th>מיקוד</th></tr>
+  <tr><td>blabla</td><td>22</td><td>C</td><td>4</td><td>something nice</td><td>44531</td></tr>
+  </table>
+
+  טלפון קווי
+  03 4566391
+  טלפון נייד
+  05566991110
+
+  MMD
+  10:12 aves 2.1.1990 MMx12
+  כאשר עבדתי ב
+
+  במפעל ☐
+  ת. דרכים בעבודה ☐
+  מקום התאונה:
+  ☐ אחר
+
+  כתובת מקום התאונה
+  \-
+
+  נסיבות הפגיעה / תאור התאונה
+
+  האיבר שנפגע
+
+  שם המבקש
+  חתימה*
+
+  למילוי ע״י המוסד הרפואי
+  כללית ☐
+  ☐ מכבי
+  ☐ מאוחדת
+  ☒ לאומית
+  ☐ הנפגע חבר בקופת חולים
+
+  תאריך מילוי הטופס
+  0307 2024
+  יום
+
+  שם משפחה
+  Lina
+
+  סוג העבודה
+  ☒ ת. דרכים בדרך לעבודה/מהעבודה
+  ☐ תאונה בדרך ללא רכב
+
+Key parsing notes:
+- ת.ז. and ס״ב share a row → OCR produces 10-digit string "3940558691"; output all 10 digits
+  (rule 9 — validator flags the length, vision correction separates ת.ז. from ס"ב)
+- Date strings here are shorter than 8 digits (some boxes empty); apply rule 4a sub-cases:
+  "3 92024" strip space → 6 digits → D+M+YYYY: day="03", month="09", year="2024" (dateOfInjury)
+  "3 8 2024" strip spaces → 6 digits → D+M+YYYY: day="03", month="08", year="2024" (formReceiptDateAtClinic)
+  "0307 2024" strip space → 8 digits → DDMMYYYY: day="03", month="07", year="2024" (formFillingDate)
+  "392024" → 6 digits → D+M+YYYY: day="03", month="09", year="2024" (dateOfBirth)
+- Name: שם משפחה="Lina" (in פרטי התובע section); שם פרטי="golan" → lastName="Lina", firstName="golan"
+- Gender: "נקבה ☒" → gender="נקבה"
+- Address table: כניסה="C", דירה="4" (cells not merged on this form) → entrance="C", apartment="4"
+- landlinePhone: "03 4566391" → strip space → "034566391"
+- jobType: "MMD" before "כאשר עבדתי ב" → jobType="MMD"
+- timeOfInjury: "10:12" from "10:12 aves 2.1.1990 MMx12" (remainder is OCR noise) → timeOfInjury="10:12"
+- accidentLocation: ☒ glyph appears between "סוג העבודה" (job-type label) and
+  "ת. דרכים בדרך לעבודה/מהעבודה" (accident-location option) — it belongs to the
+  accident-location checkbox → accidentLocation="ת. דרכים בדרך לעבודה/מהעבודה"
+- accidentAddress: "\-" on form → empty string
+- Signature: "חתימה*" — asterisk/star mark, not a signature → signature=""
+- healthFundMember: OCR shows "☒ לאומית" (RTL checkbox mis-attribution — the ☒ is
+  physically on the מכבי box but OCR attaches it to לאומית); output OCR best-read "לאומית"
+  (vision corrector re-reads from image and corrects)\
+""",
+        '{"lastName":"Lina","firstName":"golan","idNumber":"3940558691","gender":"נקבה","dateOfBirth":{"day":"03","month":"09","year":"2024"},"address":{"street":"blabla","houseNumber":"22","entrance":"C","apartment":"4","city":"something nice","postalCode":"44531","poBox":""},"landlinePhone":"034566391","mobilePhone":"05566991110","jobType":"MMD","dateOfInjury":{"day":"03","month":"09","year":"2024"},"timeOfInjury":"10:12","accidentLocation":"ת. דרכים בדרך לעבודה/מהעבודה","accidentAddress":"","accidentDescription":"","injuredBodyPart":"","signature":"","formFillingDate":{"day":"03","month":"07","year":"2024"},"formReceiptDateAtClinic":{"day":"03","month":"08","year":"2024"},"medicalInstitutionFields":{"healthFundMember":"לאומית","natureOfAccident":"","medicalDiagnoses":""}}',
     ),
 ]
 
@@ -620,7 +721,7 @@ STRICT RULES:
    (e.g. 0501234567).
 7. The previous guess may be wrong — trust the image, not the guess. If the image clearly shows the
    same value, return that same value.
-8. signature: return "קיימת" ONLY if there is a clear handwritten signature (an ink mark,
+8. signature: return "קיימת" ONLY if there is a clear signature (an ink mark,
    initials, or cursive writing) physically inside the חתימה box.
    The form shows both a חתימה box and an adjacent שם המבקש (name of applicant) field —
    text in the שם המבקש field does NOT count as a signature. If the חתימה box is blank,

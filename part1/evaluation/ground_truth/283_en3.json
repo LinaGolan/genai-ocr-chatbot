@@ -2,7 +2,7 @@
   "lastName": "Cohen",
   "firstName": "David",
   "idNumber": "555444330",
-  "gender": "Male",
+  "gender": "זכר",
   "dateOfBirth": {
     "day": "07",
     "month": "12",
@@ -30,7 +30,7 @@
   "accidentAddress": "City Hall, 1 Safra Square, Jerusalem",
   "accidentDescription": "Electric shock while repairing panel in basement",
   "injuredBodyPart": "Right hand and forearm",
-  "signature": "David Cohen",
+  "signature": "קיימת",
   "formFillingDate": {
     "day": "25",
     "month": "08",
@@ -42,7 +42,7 @@
     "year": "2024"
   },
   "medicalInstitutionFields": {
-    "healthFundMember": "Meuhedet",
+    "healthFundMember": "מאוחדת",
     "natureOfAccident": "Workplace electrical accident",
     "medicalDiagnoses": "Electrical burns right hand, superficial"
   }

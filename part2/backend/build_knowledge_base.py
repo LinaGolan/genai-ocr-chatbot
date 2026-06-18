@@ -16,7 +16,7 @@ Run (from the repository root):
   python -m part2.backend.build_knowledge_base             # all configured topics
   python -m part2.backend.build_knowledge_base pregnancy   # one topic only
 
-Output: phase2_data/processed/<topic>_<hmo>_<tier>.md
+Output: phase2_data/processed/<hmo>/<tier>/<topic>.md
 """
 
 from __future__ import annotations

@@ -151,10 +151,7 @@ def _render_confirmation() -> None:
         edited: dict = {}
         for key, label in _FIELD_LABELS.items():
             value = info.get(key, "")
-            if key == "age":
-                edited[key] = st.text_input(label, value=str(value))
-            else:
-                edited[key] = st.text_input(label, value=str(value))
+            edited[key] = st.text_input(label, value=str(value))
 
         col_ok, col_edit = st.columns(2)
         confirmed = col_ok.form_submit_button("✅ Confirm / אישור", type="primary")

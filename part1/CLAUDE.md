@@ -10,7 +10,7 @@ Extract the assignment's target JSON from an uploaded PDF/JPG of the BL283 form.
 - `backend/validator.py` — two-signal validation: deterministic checks + OCR confidence (vision-verified fields arrive as `trusted_fields` and skip the low-confidence flag but still face deterministic checks). Exposes `failing_fields()` so the corrector knows which fields to re-read.
 - `backend/prompts.py` — all prompt text
 - `frontend/app.py` — Streamlit: raw OCR (left) + JSON viewer with confidence highlights (right)
-- `evaluation/` — offline accuracy harness + ground-truth JSON for the `phase1_data` samples
+- `evaluation/` — offline accuracy harness + ground-truth JSON for all 6 `phase1_data` samples (3 Hebrew + 3 English). `generate_english_samples.py` creates the English PDFs and their canonical ground-truth JSONs; ground-truth files live in `evaluation/ground_truth/` named after their PDF stem.
 
 # Constraints specific to Part 1
 - Forms come in **Hebrew or English** — extract regardless of language.

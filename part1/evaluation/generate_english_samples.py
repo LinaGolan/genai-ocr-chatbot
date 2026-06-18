@@ -4,20 +4,20 @@ Overlays English data values onto the blank 283_raw.pdf template.
 
 Outputs:
   phase1_data/283_en1.pdf  (and en2, en3)
-  evaluation/ground_truth_en1.json  (and en2, en3)
+  part1/evaluation/ground_truth/283_en1.json  (and en2, en3)
 
 Run from the repo root:
-  python evaluation/generate_english_samples.py
+  python -m part1.evaluation.generate_english_samples
 """
 
 import fitz  # PyMuPDF
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "phase1_data" / "283_raw.pdf"
 PDF_OUT = ROOT / "phase1_data"
-GT_OUT = Path(__file__).parent
+GT_OUT = Path(__file__).parent / "ground_truth"
 
 FONT = "helv"
 FS = 8
@@ -29,7 +29,7 @@ FS_SM = 7
 SAMPLES = [
     {
         "pdf": "283_en1.pdf",
-        "gt":  "ground_truth_en1.json",
+        "gt":  "283_en1.json",
         "data": {
             "lastName":   "Smith",
             "firstName":  "John",
@@ -58,15 +58,27 @@ SAMPLES = [
             "formFillingDate":         {"day": "10", "month": "06", "year": "2024"},
             "formReceiptDateAtClinic": {"day": "11", "month": "06", "year": "2024"},
             "medicalInstitutionFields": {
-                "healthFundMember":  "Maccabi",
+                "healthFundMember":  "maccabi",
                 "natureOfAccident":  "Workplace fall",
                 "medicalDiagnoses":  "Fracture of left radius",
+            },
+        },
+        # Canonical values the pipeline extracts (differ from the raw data above for
+        # fields the pipeline normalises: gender → Hebrew, signature → "קיימת" or "",
+        # healthFundMember → canonical Hebrew HMO name).
+        "gt_overrides": {
+            "gender": "זכר",
+            "signature": "קיימת",
+            "medicalInstitutionFields": {
+                "healthFundMember": "מכבי",
+                "natureOfAccident": "Workplace fall",
+                "medicalDiagnoses": "Fracture of left radius",
             },
         },
     },
     {
         "pdf": "283_en2.pdf",
-        "gt":  "ground_truth_en2.json",
+        "gt":  "283_en2.json",
         "data": {
             "lastName":   "Johnson",
             "firstName":  "Sarah",
@@ -95,15 +107,24 @@ SAMPLES = [
             "formFillingDate":         {"day": "03", "month": "11", "year": "2023"},
             "formReceiptDateAtClinic": {"day": "04", "month": "11", "year": "2023"},
             "medicalInstitutionFields": {
-                "healthFundMember":  "Clalit",
+                "healthFundMember":  "clalit",
                 "natureOfAccident":  "Road accident on way to work",
                 "medicalDiagnoses":  "Right knee sprain, grade II",
+            },
+        },
+        "gt_overrides": {
+            "gender": "נקבה",
+            "signature": "קיימת",
+            "medicalInstitutionFields": {
+                "healthFundMember": "כללית",
+                "natureOfAccident": "Road accident on way to work",
+                "medicalDiagnoses": "Right knee sprain, grade II",
             },
         },
     },
     {
         "pdf": "283_en3.pdf",
-        "gt":  "ground_truth_en3.json",
+        "gt":  "283_en3.json",
         "data": {
             "lastName":   "Cohen",
             "firstName":  "David",
@@ -132,9 +153,18 @@ SAMPLES = [
             "formFillingDate":         {"day": "25", "month": "08", "year": "2024"},
             "formReceiptDateAtClinic": {"day": "26", "month": "08", "year": "2024"},
             "medicalInstitutionFields": {
-                "healthFundMember":  "Meuhedet",
+                "healthFundMember":  "meuhedet",
                 "natureOfAccident":  "Workplace electrical accident",
                 "medicalDiagnoses":  "Electrical burns right hand, superficial",
+            },
+        },
+        "gt_overrides": {
+            "gender": "זכר",
+            "signature": "קיימת",
+            "medicalInstitutionFields": {
+                "healthFundMember": "מאוחדת",
+                "natureOfAccident": "Workplace electrical accident",
+                "medicalDiagnoses": "Electrical burns right hand, superficial",
             },
         },
     },
@@ -306,9 +336,11 @@ def main():
     for s in SAMPLES:
         render(s)
 
+        # Ground truth uses canonical pipeline output values, not the raw form data.
+        gt_data = {**s["data"], **s["gt_overrides"]}
         gt_path = GT_OUT / s["gt"]
         with open(gt_path, "w", encoding="utf-8") as f:
-            json.dump(s["data"], f, ensure_ascii=False, indent=2)
+            json.dump(gt_data, f, ensure_ascii=False, indent=2)
         print(f"  JSON -> {gt_path}")
 
 

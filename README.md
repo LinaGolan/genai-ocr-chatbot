@@ -126,9 +126,13 @@ the vision corrector (GPT-4o re-reads them from the image); the remaining checks
 weren't vision-verified) are flagged `uncertain`. These signals feed an overall
 `high` / `medium` / `low` accuracy estimate (critical-field or multi-field errors → `low`).
 
-Offline accuracy harness against labelled samples:
+Offline accuracy harness against 6 labelled samples (3 Hebrew + 3 English):
 
 ```powershell
+# Generate the English test PDFs and their ground-truth JSONs (one-time / when template changes)
+python -m part1.evaluation.generate_english_samples
+
+# Run the full evaluation
 python -m part1.evaluation.evaluate
 ```
 
@@ -233,4 +237,3 @@ served it, token usage, and the `finish_reason`** (with a warning if a response 
 truncated or content-filtered) — so the model/cost split described above is
 measurable, not just claimed. ID numbers are SHA-256 hashed before logging —
 **no raw PII is ever written**.
-```

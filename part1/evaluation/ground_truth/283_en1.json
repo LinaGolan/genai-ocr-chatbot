@@ -2,7 +2,7 @@
   "lastName": "Smith",
   "firstName": "John",
   "idNumber": "123456782",
-  "gender": "Male",
+  "gender": "זכר",
   "dateOfBirth": {
     "day": "15",
     "month": "03",
@@ -30,7 +30,7 @@
   "accidentAddress": "42 Industrial Zone, Tel Aviv",
   "accidentDescription": "Fell from scaffolding on third floor, landed on left arm",
   "injuredBodyPart": "Left arm",
-  "signature": "John Smith",
+  "signature": "קיימת",
   "formFillingDate": {
     "day": "10",
     "month": "06",
@@ -42,7 +42,7 @@
     "year": "2024"
   },
   "medicalInstitutionFields": {
-    "healthFundMember": "Maccabi",
+    "healthFundMember": "מכבי",
     "natureOfAccident": "Workplace fall",
     "medicalDiagnoses": "Fracture of left radius"
   }

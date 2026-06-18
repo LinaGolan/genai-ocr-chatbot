@@ -2,7 +2,7 @@
   "lastName": "Johnson",
   "firstName": "Sarah",
   "idNumber": "987654324",
-  "gender": "Female",
+  "gender": "נקבה",
   "dateOfBirth": {
     "day": "22",
     "month": "08",
@@ -30,7 +30,7 @@
   "accidentAddress": "Route 2 near Haifa interchange",
   "accidentDescription": "Slipped on wet entrance floor, injured right knee",
   "injuredBodyPart": "Right knee",
-  "signature": "Sarah Johnson",
+  "signature": "קיימת",
   "formFillingDate": {
     "day": "03",
     "month": "11",
@@ -42,7 +42,7 @@
     "year": "2023"
   },
   "medicalInstitutionFields": {
-    "healthFundMember": "Clalit",
+    "healthFundMember": "כללית",
     "natureOfAccident": "Road accident on way to work",
     "medicalDiagnoses": "Right knee sprain, grade II"
   }
